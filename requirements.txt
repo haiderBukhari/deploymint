@@ -1,0 +1,60 @@
+# DeployMint — runtime dependencies (direct only)
+#
+# This mirrors [project.dependencies] in pyproject.toml. For a dev checkout:
+#     pip install -r requirements.txt
+# For an editable install of the package itself (preferred):
+#     pip install -e ".[dev]"
+#
+# Exact versions of the full resolved tree live in requirements.lock.txt.
+# Python 3.11–3.13 only. NOT 3.14+, NOT 3.15 (no wheels for tree-sitter/checkov).
+
+# ---- web server ----
+fastapi>=0.111
+uvicorn[standard]>=0.30
+websockets>=12.0
+python-multipart>=0.0.9
+jinja2>=3.1
+
+# ---- data & validation ----
+sqlalchemy>=2.0
+pydantic>=2.7
+pydantic-settings>=2.3
+pyyaml>=6.0
+
+# ---- cli ----
+click>=8.1
+rich>=13.7
+httpx>=0.27
+
+# ---- code analysis (Architect Agent) ----
+tree-sitter>=0.22
+tree-sitter-language-pack>=0.2
+# NOTE: >=3.3 is REQUIRED and is deliberately incompatible with checkov's stale
+# `networkx<2.7` pin. Checkov is verified working on networkx 3.6.1 (it runs as a
+# subprocess, never imported) — see docs/00-prerequisites.md §0.7. If a future
+# `pip install` downgrades this to 2.6.x, the Architect Agent regresses.
+networkx>=3.3
+
+# ---- execution (Execution Engine) ----
+docker>=7.0
+libtmux>=0.37
+
+# ---- agents / llm ----
+langgraph>=0.2
+langchain-core>=0.3
+langchain-ollama>=0.2
+
+# ---- observability (Oracle) ----
+scikit-learn>=1.5
+
+# ---- NOT listed here, on purpose ----
+#
+# checkov    - invoked as a SUBPROCESS by the Security Warden, never imported
+#              (architecture decision #9). Its pinned deps would drag the whole
+#              tree backwards. Install separately:  pip install checkov
+#              ...or fully isolated:                pipx install checkov
+#
+# boto3      - only for the live AWS Cost Explorer path. Optional extra: [aws]
+# litellm    - only for the non-Ollama model router. Optional extra: [router]
+# chromadb   - RAG few-shot is a stretch goal; heavy + conflicting deps
+# prophet    - needs a compiler toolchain; the Oracle uses IsolationForest only
