@@ -1,0 +1,99 @@
+"""Prerequisite checks, exposed at GET /api/doctor. See
+docs/05-phase-1-foundation.md Step 1.9."""
+
+import asyncio
+import shutil
+
+from sqlalchemy import text
+
+from deploymint.config import get_settings
+
+
+async def run_checks() -> list[dict]:
+    checks = []
+    checks.append(await _check_database())
+    checks.append(_check_workspace())
+    checks.append(await _check_llm())
+    checks.append(_check_docker_socket())
+    checks.append(_check_kubeconfig())
+    checks.append(_check_binary("tmux", warn_only=True))
+    checks.append(_check_binary("checkov", warn_only=True))
+    checks.append(_check_binary("opa", warn_only=True))
+    return checks
+
+
+async def _check_database() -> dict:
+    from deploymint.db.database import get_engine
+
+    try:
+        engine = get_engine()
+        await asyncio.to_thread(_ping_db, engine)
+        return {"name": "database", "status": "pass", "detail": "Postgres reachable", "fix": ""}
+    except Exception as e:
+        return {
+            "name": "database", "status": "fail",
+            "detail": f"cannot reach Postgres: {str(e)[:200]}",
+            "fix": "check DATABASE_URL / docker compose ps db",
+        }
+
+
+def _ping_db(engine) -> None:
+    with engine.connect() as conn:
+        conn.execute(text("SELECT 1"))
+
+
+def _check_workspace() -> dict:
+    root = get_settings().workspace_root
+    if root.is_dir():
+        return {"name": "workspace", "status": "pass", "detail": str(root), "fix": ""}
+    return {
+        "name": "workspace", "status": "fail",
+        "detail": f"{root} does not exist or is not a directory",
+        "fix": "check DEPLOYMINT_PROJECTS_DIR / the volume mount",
+    }
+
+
+async def _check_llm() -> dict:
+    from deploymint.core import llm
+
+    ok, detail = await llm.health()
+    return {
+        "name": "llm", "status": "pass" if ok else "warn", "detail": detail,
+        "fix": "" if ok else "set ANTHROPIC_API_KEY — templates still work without it",
+    }
+
+
+def _check_docker_socket() -> dict:
+    import os
+
+    if os.path.exists("/var/run/docker.sock"):
+        return {"name": "docker_socket", "status": "pass", "detail": "mounted", "fix": ""}
+    return {
+        "name": "docker_socket", "status": "fail", "detail": "not mounted",
+        "fix": "mount /var/run/docker.sock in docker-compose.yml",
+    }
+
+
+def _check_kubeconfig() -> dict:
+    import os
+
+    path = os.path.expanduser("~/.kube/config")
+    if os.path.exists(path):
+        return {"name": "kubeconfig", "status": "pass", "detail": path, "fix": ""}
+    return {
+        "name": "kubeconfig", "status": "warn",
+        "detail": "not mounted — deploys will fall back to `docker run`",
+        "fix": "mount ~/.kube/config if you have a cluster",
+    }
+
+
+def _check_binary(name: str, warn_only: bool = False) -> dict:
+    path = shutil.which(name)
+    if path:
+        return {"name": name, "status": "pass", "detail": path, "fix": ""}
+    return {
+        "name": name,
+        "status": "warn" if warn_only else "fail",
+        "detail": "not found on PATH",
+        "fix": f"install {name}",
+    }

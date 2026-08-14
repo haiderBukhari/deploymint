@@ -264,7 +264,7 @@ design.
 
 | Topic | When | Time |
 |---|---|---|
-| NetworkX PageRank | Phase 1, if you want criticality ranking | 30 min — it's `nx.pagerank(g.reverse())`, one line |
+| NetworkX PageRank | Phase 1, if you want criticality ranking | 30 min — it's `nx.pagerank(g)`, one line. Do NOT reverse the graph first — see `04-agents-spec.md` §4.1 for why that's backwards for an importer→imported edge convention |
 | scikit-learn IsolationForest | Phase 6 | 30 min — `fit_predict(X)`, `-1` means anomaly |
 | boto3 Cost Explorer | stretch goal | 1 h |
 | Cytoscape.js | Phase 6 graph viz | 45 min — or skip and render an adjacency list |

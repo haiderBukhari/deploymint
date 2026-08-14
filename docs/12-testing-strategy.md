@@ -50,9 +50,17 @@ def workspace(tmp_path, monkeypatch):
     get_settings.cache_clear()
 
     import deploymint.db.database as dbmod
+    from deploymint.db.models import Base
     dbmod._engine = None
     dbmod._SessionLocal = None
-    dbmod.init_db()
+    engine = dbmod.get_engine()
+    # Full isolation per test, not just per test-run: drop and recreate every
+    # table so rows from an earlier test in the same session can't leak in.
+    # Discovered as a real failure during Phase 1 implementation — pointing at
+    # an isolated database is necessary but not sufficient; create_all() alone
+    # doesn't clear rows a prior test already committed.
+    Base.metadata.drop_all(bind=engine)
+    Base.metadata.create_all(bind=engine)
 
     yield ws
 

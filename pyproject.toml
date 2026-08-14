@@ -1,0 +1,75 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "deploymint"
+version = "0.1.0"
+description = "AI agent swarm for secure deployment: reads your code, writes your configs, proves they're safe, deploys them. Runs as a self-hosted Docker Compose app."
+readme = "README.md"
+requires-python = ">=3.11,<3.14"
+license = { text = "Apache-2.0" }
+authors = [{ name = "Haider Bukhari", email = "haider@ottooptics.io" }]
+keywords = ["devops", "kubernetes", "docker", "ai-agents", "security", "finops"]
+
+dependencies = [
+  "fastapi>=0.111",
+  "uvicorn[standard]>=0.30",
+  "sqlalchemy>=2.0",
+  "psycopg[binary]>=3.1",
+  "pydantic>=2.7",
+  "pydantic-settings>=2.3",
+  "jinja2>=3.1",
+  "python-multipart>=0.0.9",
+  "websockets>=12.0",
+  "httpx>=0.27",
+  "click>=8.1",
+  "rich>=13.7",
+  "pyyaml>=6.0",
+  "tree-sitter>=0.22",
+  "tree-sitter-language-pack>=0.2",
+  "networkx>=3.3",
+  "docker>=7.0",
+  "libtmux>=0.37",
+  "anthropic>=0.69",
+  "langgraph>=0.2",
+  "langchain-core>=0.3",
+  "scikit-learn>=1.5",
+]
+
+[project.optional-dependencies]
+aws = ["boto3>=1.34"]
+dev = ["pytest>=8.0", "pytest-asyncio>=0.23", "ruff>=0.5", "mypy>=1.11", "checkov>=3.2.0"]
+
+[project.scripts]
+deploymint = "deploymint.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["deploymint*"]
+
+[tool.setuptools.package-data]
+deploymint = [
+  "policies/*.rego",
+  "data/*.json",
+  "data/*.jsonl",
+  "web/templates/*.html",
+  "web/templates/partials/*.html",
+  "web/static/*",
+  "web/static/vendor/*",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "S"]
+ignore = ["S101"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+markers = [
+  "slow: requires the mounted docker socket",
+  "llm: requires a real ANTHROPIC_API_KEY",
+]

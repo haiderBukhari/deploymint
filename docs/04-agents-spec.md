@@ -170,13 +170,21 @@ Go:
 ```python
 import networkx as nx
 
-pr = nx.pagerank(graph.reverse())   # reverse: heavily-imported files rank high
+pr = nx.pagerank(graph)   # do NOT reverse — see the note below
 critical_files = [n for n, _ in sorted(pr.items(), key=lambda kv: -kv[1])[:5]]
 ```
 
-Reverse the graph first. In an import graph `A → B` means "A imports B", so incoming
-edges = "many files depend on me" = critical. PageRank on the un-reversed graph would
-rank your *entrypoint* as most critical, which is backwards.
+**Do not reverse the graph — verified against the original draft of this doc, which had
+it backwards.** In this import graph, edge `A → B` means "A imports B", so a node's
+*in-degree in the graph as built* already equals "how many files import me" = critical.
+PageRank computed directly on this graph rewards nodes with many incoming edges, which
+is exactly what you want. Reversing first flips every edge to "B is imported by A",
+which makes PageRank reward nodes with many *outgoing* edges instead — i.e. it ranks
+whatever imports the most other files (usually the entrypoint) as most critical, which
+is backwards. Confirmed empirically during implementation: for the graph
+`models→db, routes→db, routes→models, main→routes`, the un-reversed graph correctly
+ranks `db.py` highest (0.42); the reversed version ranks `main.py` highest instead
+(0.39) — exactly the wrong file.
 
 Also detect cycles — `list(nx.simple_cycles(g))[:5]` — and surface them. "You have a
 circular import between `models.py` and `services.py`" is a genuinely useful finding that

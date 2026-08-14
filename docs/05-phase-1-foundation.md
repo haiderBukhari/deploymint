@@ -68,7 +68,9 @@ class Settings(BaseSettings):
     database_url_env: str = "postgresql+psycopg://deploymint:deploymint@localhost:5432/deploymint"
 
     # llm — see 04-agents-spec.md §4.10 and core/llm.py
-    anthropic_api_key: str = ""     # required; read from env, never hardcoded
+    # ANTHROPIC_API_KEY is read directly, no DEPLOYMINT_ prefix — it's the
+    # standard convention the Anthropic SDK itself uses. See the anthropic_api_key
+    # property below, same pattern as database_url.
     model: str = "claude-opus-5"
     llm_timeout: int = 120
 
@@ -94,6 +96,11 @@ class Settings(BaseSettings):
     def database_url(self) -> str:
         import os
         return os.environ.get("DATABASE_URL", self.database_url_env)
+
+    @property
+    def anthropic_api_key(self) -> str:
+        import os
+        return os.environ.get("ANTHROPIC_API_KEY", "")
 
 
 @lru_cache
