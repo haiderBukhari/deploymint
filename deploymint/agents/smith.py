@@ -35,6 +35,11 @@ class ArtifactSmithAgent(BaseAgent):
         try:
             artifacts = await self._generate_llm(analysis, project_name, image)
             how = "llm"
+        except llm.LLMUnavailable as e:
+            # The API itself was unreachable — there is no malformed output to
+            # repair (self._last_raw was never set), so go straight to the
+            # template fallback rather than raising a confusing AttributeError.
+            err = str(e)[:300]
         except (llm.LLMError, ValidationError, ValueError, KeyError) as e:
             err = str(e)[:300]
             try:

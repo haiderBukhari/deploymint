@@ -21,7 +21,7 @@ async def test_run_falls_back_to_template_without_a_real_key(client, registered_
     full HTTP pipeline (register -> trigger -> Architect -> Smith -> artifacts)
     works end to end via the resilience path, never via a real API call."""
     pid = registered_project["id"]
-    r = client.post(f"/api/projects/{pid}/runs", json={})
+    r = client.post(f"/api/projects/{pid}/runs", json={"skip_deploy": True})
     assert r.status_code == 202
     run_id = r.json()["run_id"]
 
@@ -76,7 +76,9 @@ async def test_run_uses_llm_when_available(client, registered_project):
     })
     pid = registered_project["id"]
     with patch("deploymint.core.llm.complete", return_value=good):
-        run_id = client.post(f"/api/projects/{pid}/runs", json={}).json()["run_id"]
+        run_id = client.post(
+            f"/api/projects/{pid}/runs", json={"skip_deploy": True}
+        ).json()["run_id"]
         run = _wait_for_terminal(client, run_id)
 
     assert run["status"] == "success", run.get("security")
@@ -93,7 +95,7 @@ def test_trigger_on_missing_project_is_404(client):
 
 def test_artifacts_before_run_completes_is_400(client, registered_project):
     pid = registered_project["id"]
-    run_id = client.post(f"/api/projects/{pid}/runs", json={}).json()["run_id"]
+    run_id = client.post(f"/api/projects/{pid}/runs", json={"skip_deploy": True}).json()["run_id"]
     # immediately after triggering, artifacts likely aren't ready yet OR the run
     # already finished (template path is fast) — assert whichever is consistent
     resp = client.get(f"/api/runs/{run_id}/artifacts")
@@ -153,7 +155,7 @@ async def test_force_overrides_a_block(client, registered_poisoned_project):
     pid = registered_poisoned_project["id"]
     with patch("deploymint.core.llm.complete", return_value=compromised):
         run_id = client.post(
-            f"/api/projects/{pid}/runs", json={"force": True}
+            f"/api/projects/{pid}/runs", json={"force": True, "skip_deploy": True}
         ).json()["run_id"]
         run = _wait_for_terminal(client, run_id)
 

@@ -9,6 +9,7 @@ import uuid
 from datetime import datetime, timezone
 
 from deploymint.agents.architect import ArchitectAgent
+from deploymint.agents.execution import ExecutionEngineAgent
 from deploymint.agents.redteam import RedTeamAgent
 from deploymint.agents.smith import ArtifactSmithAgent
 from deploymint.agents.warden import SecurityWardenAgent
@@ -89,16 +90,26 @@ async def _execute(run_id, project_id, name, repo_path, force, skip_deploy, bus)
                     db.commit()
 
             security = state.get("security") or {}
-            if not security.get("passed", False) and not force:
+            gate_passed = security.get("passed", False)
+            if not gate_passed and not force:
                 status = "blocked"
-            elif not security.get("passed", False) and force:
-                await bus.emit("warden.forced", {"reason": security.get("blocked_reason")})
-                # No execution engine yet — Phase 4 runs it here, behind the force flag.
-                status = "success" if state.get("artifacts") else "failed"
             else:
-                # No execution yet — arrives in Phase 4. A passed run that reaches
-                # here with artifacts is "success" for now.
-                status = "success" if state.get("artifacts") else "failed"
+                if not gate_passed and force:
+                    await bus.emit("warden.forced", {"reason": security.get("blocked_reason")})
+
+                if skip_deploy or not state.get("artifacts"):
+                    status = "success" if state.get("artifacts") else "failed"
+                else:
+                    agent = ExecutionEngineAgent(bus)
+                    state["current_node"] = agent.name
+                    await bus.emit("node.enter", {"node": agent.name})
+                    partial = await agent.run(state)
+                    state.update(partial)
+                    await bus.emit("node.exit", {"node": agent.name})
+                    with Session() as db:
+                        db.query(Run).filter_by(id=run_id).update({"current_node": agent.name})
+                        db.commit()
+                    status = "success" if (state.get("deployment") or {}).get("status") == "running" else "failed"
 
         except asyncio.CancelledError:
             status = "cancelled"

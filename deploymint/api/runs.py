@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
+from deploymint.core.audit import verify_chain
 from deploymint.db.database import get_db
 from deploymint.db.models import Project, Run
 from deploymint.runner.manager import cancel_run, start_run
@@ -62,6 +63,13 @@ def get_artifacts(run_id: str, db: Session = Depends(get_db)):
     if not run.artifacts:
         raise HTTPException(400, "no artifacts for this run yet")
     return run.artifacts
+
+
+@router.get("/api/runs/{run_id}/audit/verify")
+def get_audit_verify(run_id: str, db: Session = Depends(get_db)):
+    if not db.get(Run, run_id):
+        raise HTTPException(404, "run not found")
+    return verify_chain(run_id)
 
 
 @router.get("/api/runs/{run_id}/artifacts/{filename}")
