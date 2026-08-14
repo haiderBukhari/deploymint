@@ -1,18 +1,11 @@
-"""Run orchestration. This is the Phase 2 LINEAR driver — Phase 5 replaces the
-body of _execute() with a LangGraph StateGraph; the public start_run/cancel_run
-surface stays the same. See docs/06-phase-2-generation.md §2.7 and
-docs/09-phase-5-orchestration.md."""
+"""Run orchestration via a LangGraph StateGraph. See docs/09-phase-5-orchestration.md."""
 
 import asyncio
 import time
 import uuid
 from datetime import datetime, timezone
 
-from deploymint.agents.architect import ArchitectAgent
-from deploymint.agents.execution import ExecutionEngineAgent
-from deploymint.agents.redteam import RedTeamAgent
-from deploymint.agents.smith import ArtifactSmithAgent
-from deploymint.agents.warden import SecurityWardenAgent
+from deploymint.agents.graph import build_graph
 from deploymint.core.events import registry
 from deploymint.db.database import get_session_factory
 from deploymint.db.models import Event, Project, Run
@@ -72,63 +65,36 @@ async def _execute(run_id, project_id, name, repo_path, force, skip_deploy, bus)
             "run_id": run_id, "project_id": project_id, "project_name": name,
             "repo_path": repo_path, "force": force, "errors": [], "current_node": "",
         }
+        final = state
 
         try:
-            agents = (ArchitectAgent(bus), ArtifactSmithAgent(bus),
-                      SecurityWardenAgent(bus), RedTeamAgent(bus))
-            for agent in agents:
-                state["current_node"] = agent.name
-                await bus.emit("node.enter", {"node": agent.name})
-                node_t0 = time.perf_counter()
-                partial = await agent.run(state)
-                state.update(partial)
-                await bus.emit(
-                    "node.exit", {"node": agent.name, "ms": int((time.perf_counter() - node_t0) * 1000)}
-                )
+            graph = build_graph(bus, skip_deploy=skip_deploy)
+            async for chunk in graph.astream(state, stream_mode="values"):
+                final = chunk
                 with Session() as db:
-                    db.query(Run).filter_by(id=run_id).update({"current_node": agent.name})
+                    db.query(Run).filter_by(id=run_id).update(
+                        {"current_node": chunk.get("current_node", "")})
                     db.commit()
-
-            security = state.get("security") or {}
-            gate_passed = security.get("passed", False)
-            if not gate_passed and not force:
-                status = "blocked"
-            else:
-                if not gate_passed and force:
-                    await bus.emit("warden.forced", {"reason": security.get("blocked_reason")})
-
-                if skip_deploy or not state.get("artifacts"):
-                    status = "success" if state.get("artifacts") else "failed"
-                else:
-                    agent = ExecutionEngineAgent(bus)
-                    state["current_node"] = agent.name
-                    await bus.emit("node.enter", {"node": agent.name})
-                    partial = await agent.run(state)
-                    state.update(partial)
-                    await bus.emit("node.exit", {"node": agent.name})
-                    with Session() as db:
-                        db.query(Run).filter_by(id=run_id).update({"current_node": agent.name})
-                        db.commit()
-                    status = "success" if (state.get("deployment") or {}).get("status") == "running" else "failed"
+            status = _final_status(final)
 
         except asyncio.CancelledError:
             status = "cancelled"
             raise
         except Exception as e:
             status = "failed"
-            state["errors"] = state.get("errors", []) + [f"runner: {str(e)[:300]}"]
+            final["errors"] = final.get("errors", []) + [f"graph: {str(e)[:300]}"]
         finally:
             ms = int((time.perf_counter() - t0) * 1000)
             with Session() as db:
                 db.query(Run).filter_by(id=run_id).update({
                     "status": status,
-                    "analysis": state.get("analysis"),
-                    "artifacts": state.get("artifacts"),
-                    "security": state.get("security"),
-                    "deployment": state.get("deployment"),
-                    "cost": state.get("cost"),
-                    "errors": state.get("errors", []),
-                    "model_used": (state.get("artifacts") or {}).get("model_used"),
+                    "analysis": final.get("analysis"),
+                    "artifacts": final.get("artifacts"),
+                    "security": final.get("security"),
+                    "deployment": final.get("deployment"),
+                    "cost": final.get("cost"),
+                    "errors": final.get("errors", []),
+                    "model_used": (final.get("artifacts") or {}).get("model_used"),
                     "duration_ms": ms,
                     "completed_at": datetime.now(timezone.utc),
                 })
@@ -137,6 +103,21 @@ async def _execute(run_id, project_id, name, repo_path, force, skip_deploy, bus)
             await bus.close()
             registry.drop(run_id)
             _tasks.pop(run_id, None)
+
+
+def _final_status(state: dict) -> str:
+    sec = state.get("security") or {}
+    dep = state.get("deployment") or {}
+    if state.get("current_node") == "blocked" or (
+        sec.get("passed") is False and not state.get("force")
+    ):
+        return "blocked"
+    if dep.get("status") == "failed":
+        return "failed"
+    if dep.get("status") == "running":
+        return "success"
+    # skip_deploy path: no Execution Engine node ran at all
+    return "success" if state.get("artifacts") else "failed"
 
 
 async def cancel_run(run_id: str) -> bool:

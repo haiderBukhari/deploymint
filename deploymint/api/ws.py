@@ -1,0 +1,70 @@
+"""Live event stream for a run. Replays persisted events since a client-given
+seq, then tails the live queue. Uses EventBus.subscribe()/unsubscribe() (not a
+single shared queue) so multiple tabs on the same run each get the full
+stream. See docs/09-phase-5-orchestration.md §5.3."""
+
+import asyncio
+
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+
+from deploymint.core.events import registry
+from deploymint.db.database import get_session_factory
+from deploymint.db.models import Event, Run
+
+router = APIRouter()
+TERMINAL = {"success", "failed", "blocked", "cancelled"}
+
+
+@router.websocket("/ws/runs/{run_id}")
+async def stream_run(ws: WebSocket, run_id: str):
+    await ws.accept()
+    Session = get_session_factory()
+
+    since = 0
+    try:
+        first = await asyncio.wait_for(ws.receive_json(), timeout=2.0)
+        since = int(first.get("since", 0))
+    except Exception:
+        since = 0
+
+    with Session() as db:
+        rows = (db.query(Event).filter(Event.run_id == run_id, Event.seq > since)
+                .order_by(Event.seq).all())
+        for r in rows:
+            await ws.send_json({"seq": r.seq, "type": r.type,
+                                "payload": r.payload, "ts": r.ts.isoformat()})
+        run = db.get(Run, run_id)
+
+    if run is None:
+        await ws.close(code=4404)
+        return
+
+    if run.status in TERMINAL:
+        await ws.send_json({"seq": -1, "type": "run.end",
+                            "payload": {"status": run.status}})
+        await ws.close()
+        return
+
+    bus = registry.get(run_id)
+    if not bus:
+        # The run finished between the DB read above and here — nothing left
+        # to tail, and its status was already sent as part of the replay.
+        await ws.close()
+        return
+
+    queue = bus.subscribe()
+    try:
+        while True:
+            evt = await queue.get()
+            if evt.get("type") == "__end__":
+                break
+            if evt["seq"] > since:
+                await ws.send_json(evt)
+    except WebSocketDisconnect:
+        pass
+    finally:
+        bus.unsubscribe(queue)
+        try:
+            await ws.close()
+        except Exception:
+            pass
