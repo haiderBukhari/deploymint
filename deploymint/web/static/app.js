@@ -63,6 +63,11 @@ function connectRun(runId, since) {
         setStatus(payload.status);
         clearInterval(flush);
         ws.close();
+        // The Artifacts/Security/Cost panels are server-rendered from the DB
+        // at page load and are not patched incrementally over the socket —
+        // reload once so they pick up the run's final artifacts/security/cost,
+        // instead of staying stuck on whatever was true when the page loaded.
+        setTimeout(() => location.reload(), 400);
         break;
     }
   };
