@@ -8,7 +8,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from deploymint import __version__
-from deploymint.api import health, projects
+from deploymint.api import health, projects, runs
 from deploymint.db.database import init_db
 
 
@@ -22,6 +22,7 @@ def create_app() -> FastAPI:
     app = FastAPI(title="DeployMint", version=__version__, lifespan=lifespan)
     app.include_router(health.router)
     app.include_router(projects.router)
+    app.include_router(runs.router)
     return app
 
 
