@@ -9,7 +9,9 @@ import uuid
 from datetime import datetime, timezone
 
 from deploymint.agents.architect import ArchitectAgent
+from deploymint.agents.redteam import RedTeamAgent
 from deploymint.agents.smith import ArtifactSmithAgent
+from deploymint.agents.warden import SecurityWardenAgent
 from deploymint.core.events import registry
 from deploymint.db.database import get_session_factory
 from deploymint.db.models import Event, Project, Run
@@ -71,7 +73,9 @@ async def _execute(run_id, project_id, name, repo_path, force, skip_deploy, bus)
         }
 
         try:
-            for agent in (ArchitectAgent(bus), ArtifactSmithAgent(bus)):
+            agents = (ArchitectAgent(bus), ArtifactSmithAgent(bus),
+                      SecurityWardenAgent(bus), RedTeamAgent(bus))
+            for agent in agents:
                 state["current_node"] = agent.name
                 await bus.emit("node.enter", {"node": agent.name})
                 node_t0 = time.perf_counter()
@@ -84,9 +88,17 @@ async def _execute(run_id, project_id, name, repo_path, force, skip_deploy, bus)
                     db.query(Run).filter_by(id=run_id).update({"current_node": agent.name})
                     db.commit()
 
-            # No security gate or execution yet — those arrive in Phase 3/4.
-            # A run that reaches here with artifacts is "success" for now.
-            status = "success" if state.get("artifacts") else "failed"
+            security = state.get("security") or {}
+            if not security.get("passed", False) and not force:
+                status = "blocked"
+            elif not security.get("passed", False) and force:
+                await bus.emit("warden.forced", {"reason": security.get("blocked_reason")})
+                # No execution engine yet — Phase 4 runs it here, behind the force flag.
+                status = "success" if state.get("artifacts") else "failed"
+            else:
+                # No execution yet — arrives in Phase 4. A passed run that reaches
+                # here with artifacts is "success" for now.
+                status = "success" if state.get("artifacts") else "failed"
 
         except asyncio.CancelledError:
             status = "cancelled"

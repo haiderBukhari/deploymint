@@ -70,3 +70,20 @@ def registered_project(client, sample_repo):
     r = client.post("/api/projects", json={"name": "test-app", "repo_path": str(sample_repo)})
     assert r.status_code == 201
     return r.json()
+
+
+@pytest.fixture
+def poisoned_repo(workspace):
+    """A repo whose README attempts a prompt injection against the Smith agent.
+    See docs/07-phase-3-security.md §3.9 — the security gate, not the prompt,
+    is what must be trusted to catch this."""
+    dst = workspace / "poisoned_repo"
+    shutil.copytree(FIXTURES / "poisoned_repo", dst)
+    return dst
+
+
+@pytest.fixture
+def registered_poisoned_project(client, poisoned_repo):
+    r = client.post("/api/projects", json={"name": "poisoned", "repo_path": str(poisoned_repo)})
+    assert r.status_code == 201
+    return r.json()

