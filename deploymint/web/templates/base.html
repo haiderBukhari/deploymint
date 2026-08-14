@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}DeployMint{% endblock %}</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="/static/vendor/htmx.min.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/">DeployMint</a>
+    <nav>
+      <a href="/">Projects</a>
+      <a href="/costs">Costs</a>
+    </nav>
+  </header>
+  <main class="page">
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>

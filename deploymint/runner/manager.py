@@ -112,7 +112,10 @@ def _final_status(state: dict) -> str:
         sec.get("passed") is False and not state.get("force")
     ):
         return "blocked"
-    if dep.get("status") == "failed":
+    if dep.get("status") in ("failed", "rolled_back"):
+        # A rollback means the system self-healed, but the deploy did not end
+        # up healthy — the run is "failed" at the top level; dep.status keeps
+        # the richer "rolled_back" detail plus dep.remediation for the reader.
         return "failed"
     if dep.get("status") == "running":
         return "success"

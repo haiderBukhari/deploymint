@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}Costs · DeployMint{% endblock %}
+{% block content %}
+<h1>Costs</h1>
+
+<div class="card">
+  <h2>Ask a question</h2>
+  <form id="cost-form">
+    <input type="text" id="cost-question" placeholder="which service costs the most?">
+    <button type="submit">Ask</button>
+  </form>
+  <p id="cost-answer"></p>
+</div>
+
+<div class="card">
+  <h2>Breakdown</h2>
+  <table>
+    <thead><tr><th>Service</th><th>Amount</th></tr></thead>
+    <tbody id="cost-breakdown">
+      {% for svc, amount in breakdown.items() %}
+      <tr><td>{{ svc }}</td><td>${{ "%.2f"|format(amount) }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<script src="/static/app.js"></script>
+<script>wireCostForm();</script>
+{% endblock %}

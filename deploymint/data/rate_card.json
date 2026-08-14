@@ -1,0 +1,17 @@
+{
+  "aws": {
+    "vcpu_hour": 0.0416,
+    "gb_hour": 0.0055,
+    "note": "Approximate on-demand Fargate/EKS blended rate, us-east-1, 2026."
+  },
+  "gcp": {
+    "vcpu_hour": 0.0400,
+    "gb_hour": 0.0050,
+    "note": "Approximate GKE Autopilot blended rate, us-central1, 2026."
+  },
+  "azure": {
+    "vcpu_hour": 0.0430,
+    "gb_hour": 0.0057,
+    "note": "Approximate AKS blended rate, eastus, 2026."
+  }
+}

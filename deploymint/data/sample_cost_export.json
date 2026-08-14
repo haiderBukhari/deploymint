@@ -1,0 +1,21 @@
+{
+  "ResultsByTime": [{
+    "TimePeriod": {"Start": "2026-07-01", "End": "2026-08-01"},
+    "Total": {},
+    "Groups": [
+      {"Keys": ["Amazon Elastic Kubernetes Service"],
+       "Metrics": {"UnblendedCost": {"Amount": "218.40", "Unit": "USD"}}},
+      {"Keys": ["Amazon Elastic Compute Cloud - Compute"],
+       "Metrics": {"UnblendedCost": {"Amount": "487.12", "Unit": "USD"}}},
+      {"Keys": ["Amazon Relational Database Service"],
+       "Metrics": {"UnblendedCost": {"Amount": "312.55", "Unit": "USD"}}},
+      {"Keys": ["Amazon Simple Storage Service"],
+       "Metrics": {"UnblendedCost": {"Amount": "43.09", "Unit": "USD"}}},
+      {"Keys": ["AWS Lambda"],
+       "Metrics": {"UnblendedCost": {"Amount": "12.88", "Unit": "USD"}}},
+      {"Keys": ["Amazon CloudWatch"],
+       "Metrics": {"UnblendedCost": {"Amount": "67.31", "Unit": "USD"}}}
+    ]
+  }],
+  "GroupDefinitions": [{"Type": "DIMENSION", "Key": "SERVICE"}]
+}

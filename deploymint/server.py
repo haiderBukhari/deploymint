@@ -4,12 +4,17 @@ This module string, `deploymint.server:app`, is exactly what the Dockerfile's
 CMD runs — there is no separate CLI subcommand that wraps it."""
 
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
 
 from deploymint import __version__
-from deploymint.api import chat, health, projects, runs, ws
+from deploymint.api import chat, costs, health, projects, runs, ws
 from deploymint.db.database import init_db
+from deploymint.web import routes as web_routes
+
+WEB_DIR = Path(__file__).parent / "web"
 
 
 @asynccontextmanager
@@ -25,6 +30,9 @@ def create_app() -> FastAPI:
     app.include_router(runs.router)
     app.include_router(ws.router)
     app.include_router(chat.router)
+    app.include_router(costs.router)
+    app.include_router(web_routes.router)
+    app.mount("/static", StaticFiles(directory=str(WEB_DIR / "static")), name="static")
     return app
 
 

@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}Projects · DeployMint{% endblock %}
+{% block content %}
+<h1>Projects</h1>
+
+<form class="card form" method="post" action="/projects/register">
+  <input type="text" name="name" placeholder="project name" required>
+  <input type="text" name="repo_path" placeholder="/workspace/my-app" required>
+  <button type="submit">Register</button>
+</form>
+
+{% if error %}<p class="error">{{ error }}</p>{% endif %}
+
+<div class="grid">
+  {% for p in projects %}
+  <a class="card project-card" href="/projects/{{ p.id }}">
+    <div class="project-name">{{ p.name }}</div>
+    <div class="badges">
+      {% if p.language %}<span class="badge">{{ p.language }}</span>{% endif %}
+      {% if p.framework %}<span class="badge">{{ p.framework }}</span>{% endif %}
+    </div>
+    <div class="muted">{{ p.repo_path }}</div>
+  </a>
+  {% else %}
+  <p class="muted">No projects registered yet.</p>
+  {% endfor %}
+</div>
+{% endblock %}

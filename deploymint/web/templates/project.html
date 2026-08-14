@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block title %}{{ project.name }} · DeployMint{% endblock %}
+{% block content %}
+<a class="back" href="/">&larr; Projects</a>
+<h1>{{ project.name }}</h1>
+<p class="muted">{{ project.repo_path }}</p>
+
+<div class="card">
+  <form method="post" action="/projects/{{ project.id }}/deploy">
+    <button type="submit" class="primary">Deploy</button>
+  </form>
+</div>
+
+{% if project.analysis %}
+<div class="card">
+  <h2>Analysis</h2>
+  <p>{{ project.language }} / {{ project.framework }} — entrypoint <code>{{ project.entrypoint }}</code>,
+     port <code>{{ project.exposed_port }}</code></p>
+  {% if project.analysis.architecture_summary %}
+  <p class="muted">{{ project.analysis.architecture_summary }}</p>
+  {% endif %}
+  <div id="depgraph" style="height:320px" data-graph='{{ project.analysis.graph | tojson }}'></div>
+</div>
+{% endif %}
+
+<div class="card">
+  <h2>Run history</h2>
+  <table>
+    <thead><tr><th>Run</th><th>Status</th><th>Trigger</th><th>Started</th></tr></thead>
+    <tbody>
+      {% for r in runs %}
+      <tr>
+        <td><a href="/runs/{{ r.id }}">{{ r.id }}</a></td>
+        <td><span class="status status-{{ r.status }}">{{ r.status }}</span></td>
+        <td>{{ r.trigger }}</td>
+        <td>{{ r.created_at }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="4" class="muted">No runs yet.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<script src="/static/vendor/cytoscape.min.js"></script>
+<script src="/static/app.js"></script>
+<script>renderDepGraph();</script>
+{% endblock %}

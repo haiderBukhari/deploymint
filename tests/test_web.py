@@ -1,0 +1,76 @@
+"""The four server-rendered pages must actually render, and the vendored
+assets (no CDN) must be served. See docs/10-phase-6-finops-ui.md §6.4-6.5."""
+
+from unittest.mock import patch
+
+
+def test_index_page_renders_with_no_projects(client):
+    r = client.get("/")
+    assert r.status_code == 200
+    assert "DeployMint" in r.text
+
+
+def test_index_page_lists_a_registered_project(client, registered_project):
+    r = client.get("/")
+    assert registered_project["name"] in r.text
+
+
+def test_register_via_form_creates_a_project(client, sample_repo):
+    r = client.post("/projects/register", data={
+        "name": "form-registered", "repo_path": str(sample_repo)},
+        follow_redirects=False)
+    assert r.status_code == 303
+    assert r.headers["location"].startswith("/projects/")
+
+
+def test_project_page_renders(client, registered_project):
+    r = client.get(f"/projects/{registered_project['id']}")
+    assert r.status_code == 200
+    assert registered_project["name"] in r.text
+
+
+def test_project_page_404s_for_unknown_project(client):
+    r = client.get("/projects/999999")
+    assert r.status_code == 404
+
+
+def test_deploy_button_calls_start_run_and_redirects(client, registered_project):
+    """Mocked — the real build+deploy path (what start_run() actually does
+    when not skipped) is already verified end to end by test_execution.py
+    against the live cluster; this only needs to prove the button is wired
+    to start_run() and redirects to the new run's page."""
+    with patch("deploymint.web.routes.start_run", return_value="run_mocked456") as mock_start:
+        r = client.post(f"/projects/{registered_project['id']}/deploy", follow_redirects=False)
+    assert r.status_code == 303
+    assert r.headers["location"] == "/runs/run_mocked456"
+    mock_start.assert_called_once()
+
+
+def test_run_page_renders(client, registered_project):
+    run_id = client.post(
+        f"/api/projects/{registered_project['id']}/runs", json={"skip_deploy": True}
+    ).json()["run_id"]
+    r = client.get(f"/runs/{run_id}")
+    assert r.status_code == 200
+    assert run_id in r.text
+
+
+def test_run_page_404s_for_unknown_run(client):
+    r = client.get("/runs/run_doesnotexist")
+    assert r.status_code == 404
+
+
+def test_costs_page_renders_with_breakdown(client):
+    r = client.get("/costs")
+    assert r.status_code == 200
+    assert "487.12" in r.text
+
+
+def test_vendored_assets_are_served_with_no_cdn_reference(client):
+    r = client.get("/static/vendor/htmx.min.js")
+    assert r.status_code == 200
+    r2 = client.get("/static/vendor/cytoscape.min.js")
+    assert r2.status_code == 200
+    home = client.get("/")
+    assert "unpkg.com" not in home.text
+    assert "cdn." not in home.text

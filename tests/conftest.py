@@ -20,6 +20,12 @@ def workspace(tmp_path, monkeypatch):
     ws = tmp_path / "workspace"
     ws.mkdir()
     monkeypatch.setenv("DEPLOYMINT_WORKSPACE_ROOT", str(ws))
+    # Oracle's healthy-path watch window is SAMPLES * INTERVAL seconds by
+    # design (it watches for a full window even when nothing is wrong) —
+    # shrink it here so the test suite doesn't pay a real-world minute per
+    # successful Kubernetes deploy. See docs/10-phase-6-finops-ui.md §6.1.
+    monkeypatch.setenv("DEPLOYMINT_ORACLE_SAMPLES", "2")
+    monkeypatch.setenv("DEPLOYMINT_ORACLE_INTERVAL", "1")
     monkeypatch.setenv(
         "DATABASE_URL",
         os.environ.get(

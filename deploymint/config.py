@@ -41,6 +41,11 @@ class Settings(BaseSettings):
     max_concurrent_runs: int = 2
     max_repo_files: int = 5000
 
+    # observability — see docs/10-phase-6-finops-ui.md §6.1. Tests shrink these
+    # to keep the Oracle's watch window from dominating the test suite's runtime.
+    oracle_samples: int = 12
+    oracle_interval: int = 5
+
     @property
     def database_url(self) -> str:
         return os.environ.get("DATABASE_URL", self.database_url_env)
