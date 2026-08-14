@@ -33,6 +33,11 @@ class ObservabilityOracleAgent(BaseAgent):
         name = state["project_name"]
         if dep.get("status") != "running":
             return {}
+        if dep.get("mode") != "kubernetes":
+            # docker-run mode (08-phase-4-execution.md §4.7) has no pod metrics to
+            # poll — the health check that already gated "running" is the signal.
+            await self.emit("oracle.done", healthy=True, samples=0, mode=dep.get("mode"))
+            return {"deployment": dep}
 
         samples, anomaly_reason = [], None
 
@@ -58,7 +63,9 @@ class ObservabilityOracleAgent(BaseAgent):
 
         dep["metrics"] = samples
         if anomaly_reason:
-            await self.emit("oracle.anomaly", reason=anomaly_reason, score=1.0)
+            dep["anomaly_explanation"] = await self._explain(name, anomaly_reason)
+            await self.emit("oracle.anomaly", reason=anomaly_reason, score=1.0,
+                            explanation=dep["anomaly_explanation"])
             from deploymint.agents.remediator import RemediatorAgent
             rem = await RemediatorAgent(self.bus).run({**state, "deployment": dep,
                                                       "anomaly_reason": anomaly_reason})
@@ -111,6 +118,24 @@ class ObservabilityOracleAgent(BaseAgent):
         if n_anom >= 3:
             return f"IsolationForest flagged {n_anom}/{len(samples)} metric samples as anomalous"
         return None
+
+    async def _explain(self, name: str, reason: str) -> str:
+        """LLM anomaly explanation — 04-agents-spec.md §4.6b. Runs only on the
+        rollback path, so the added latency and cost are naturally rare. A failure
+        here never blocks the rollback itself."""
+        from deploymint.core import llm, prompts, kube_engine
+        try:
+            pod = await kube_engine.get_pod_name(name)
+            events = (await kube_engine.describe_pod(pod)).combined[-1500:] if pod else ""
+            logs = (await kube_engine.pod_logs(pod)).combined[-1500:] if pod else ""
+            return await llm.complete(
+                system="You explain Kubernetes rollback causes in plain language.",
+                user=prompts.ANOMALY_EXPLANATION_PROMPT.format(
+                    reason=reason, events=events, logs=logs),
+                max_tokens=200,
+            )
+        except Exception:
+            return reason   # fall back to the raw deterministic reason, never block
 ```
 
 ### `kubectl top` requires metrics-server, which kind does not ship
@@ -338,7 +363,7 @@ a rewrite. That is the stretch goal from the proposal, and this makes it a one-h
 ## Step 6.4 — Web UI
 
 Server-rendered Jinja2 + HTMX + a vendored WebSocket client. No npm, no build step,
-ships inside the wheel.
+ships baked into the Docker image (`02-repo-layout.md` §2.3).
 
 ```python
 # deploymint/server.py additions
@@ -375,7 +400,7 @@ def index(request: Request, db: Session = Depends(get_db)):
 ├──────────────────────────────────────────────────────────────────┤
 │ AGENT TIMELINE                                                   │
 │ ✓ Architect      1.2s   python / fastapi · 6 files · 5 edges     │
-│ ✓ Artifact Smith 18.4s  llama3.1:8b → 4 files                    │
+│ ✓ Artifact Smith 4.1s   claude-opus-5 → 4 files                  │
 │ ✓ Security Warden 3.1s  0 critical · 2 medium · PASSED           │
 │ ✓ Red Team       9.8s   11 probes · 0 findings                   │
 │ ◐ Execution      ...    building image                           │
@@ -440,9 +465,11 @@ resumes without losing a single line.
 ### Vendor your JS
 
 Download `htmx.min.js` and `cytoscape.min.js` into `web/static/vendor/`. **Do not use a
-CDN.** DeployMint's entire pitch is local-first and offline-capable; a dashboard that
-breaks without internet contradicts the product. It also means the wheel is genuinely
-self-contained.
+CDN.** The app already needs internet access for LLM calls, so this isn't about offline
+support — it's simpler and more reliable: the dashboard has one less external dependency
+to fail, no CDN outage can break page rendering, and the Docker image
+(`02-repo-layout.md` §2.3) is genuinely self-contained — nothing it serves depends on a
+third party being up.
 
 ### Keep the CSS simple
 
@@ -458,7 +485,8 @@ which reintroduces npm.
 open http://localhost:8000
 ```
 
-Register `./tests/fixtures/sample_fastapi` in the UI, click **Deploy**, and watch.
+Register `./projects/sample-api` (a copy of the FastAPI fixture placed under your
+`DEPLOYMINT_PROJECTS_DIR`) in the UI, click **Deploy**, and watch.
 
 ```bash
 curl -s -X POST localhost:8000/api/costs/query -H 'content-type: application/json' -d '{"question":"which service costs the most?"}'
@@ -467,7 +495,7 @@ curl -s -X POST localhost:8000/api/costs/query -H 'content-type: application/jso
 Then force a rollback — deploy a fixture whose app exits immediately:
 
 ```bash
-deploymint up ./tests/fixtures/crashloop_app --name crashy
+deploymint up ./projects/crashy --name crashy
 ```
 
 **Pass criteria:**
@@ -477,9 +505,13 @@ deploymint up ./tests/fixtures/crashloop_app --name crashy
 - The dependency graph renders and is interactive
 - Cost query returns "Amazon Elastic Compute Cloud - Compute" at $487.12 (from the sample)
 - The number in the answer matches the number in the breakdown table exactly
-- A crash-looping app triggers `oracle.anomaly` → rollback, visible in the timeline
+- A crash-looping app triggers `oracle.anomaly` → rollback, visible in the timeline, with
+  a plain-language `anomaly_explanation` alongside the raw reason
 - Refreshing mid-run replays the timeline with nothing lost
-- The UI works with the network disconnected (vendored assets)
+- The static dashboard (HTML/CSS/JS) renders correctly with no network access at all —
+  vendored assets, no CDN. Generating **new** artifacts still requires the LLM API to be
+  reachable; that's the one genuinely online part of the product (`01-architecture.md`
+  §1.1)
 
 Tick **Phase 6**. Next: `11-phase-7-polish-demo.md`.
 

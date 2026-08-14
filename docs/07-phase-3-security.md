@@ -30,8 +30,8 @@ three policies in it.
 > The three policies in `04-agents-spec.md` §4.3 are already written in v1 (`deny contains
 > msg if { ... }`), so they are correct as-is. No changes needed.
 
-Still add the OPA version to `deploymint doctor` output — a contributor on OPA 0.x would
-otherwise get a `rego_parse_error` with no hint as to why.
+Still add the OPA version to the `/api/doctor` output (`05-phase-1-foundation.md` §1.9) —
+a contributor on OPA 0.x would otherwise get a `rego_parse_error` with no hint as to why.
 
 ---
 
@@ -42,7 +42,6 @@ otherwise get a `rego_parse_error` with no hint as to why.
 from pathlib import Path
 import json
 from datetime import datetime, timezone
-from deploymint.config import get_settings
 
 FILENAMES = {
     "dockerfile": "Dockerfile",
@@ -52,8 +51,10 @@ FILENAMES = {
 }
 
 
-def write_artifacts(run_id: str, artifacts: dict) -> Path:
-    d = get_settings().artifacts_dir / run_id
+def write_artifacts(run_id: str, repo_path: str, artifacts: dict) -> Path:
+    """Written under the project's own .deploymint/ subfolder, inside the mounted
+    workspace — never elsewhere. See 01-architecture.md §1.7 and §1.8."""
+    d = Path(repo_path) / ".deploymint" / run_id
     d.mkdir(parents=True, exist_ok=True)
     for key, fname in FILENAMES.items():
         content = artifacts.get(key)
@@ -271,7 +272,7 @@ class SecurityWardenAgent(BaseAgent):
     async def run(self, state: DeployState) -> dict:
         s = get_settings()
         artifacts = state.get("artifacts") or {}
-        directory = write_artifacts(state["run_id"], artifacts)
+        directory = write_artifacts(state["run_id"], state["repo_path"], artifacts)
 
         ck_findings, ck_err = await scanners.run_checkov(directory)
         opa_findings, opa_err = await scanners.run_opa(artifacts)
@@ -364,10 +365,12 @@ def _cap(finding: dict) -> dict:
 ```
 
 Apply this to LLM findings only. Deterministic probes keep their stated severity. This
-means an 8B model hallucinating "CRITICAL BACKDOOR DETECTED" degrades to a `high`
-warning rather than blocking a legitimate deploy — while the regex that actually found
-`curl | bash` still blocks. **This asymmetry is the correct design and worth explaining
-in your writeup.**
+means the model hallucinating "CRITICAL BACKDOOR DETECTED" degrades to a `high` warning
+rather than blocking a legitimate deploy — while the regex that actually found
+`curl | bash` still blocks. **This asymmetry is the correct design regardless of model
+quality**, and it's worth explaining in your writeup: a strong model is still a model,
+and the trust boundary in `01-architecture.md` §1.9 (the LLM writes and explains,
+deterministic code decides) is what this cap enforces in code.
 
 ---
 
@@ -502,7 +505,7 @@ curl -s localhost:8000/api/runs/<run_id> | python -c "import json,sys; r=json.lo
 - Clean fixture → `passed=True`, run proceeds
 - Poisoned fixture → `status=blocked` with a specific, readable reason
 - At least one Checkov finding and one OPA finding appear on a deliberately bad artifact
-- Red Team's deterministic probes fire without Ollama running
+- Red Team's deterministic probes fire even with `ANTHROPIC_API_KEY` unset entirely
 - `--force` overrides the block and is recorded in the audit log
 - Removing both `checkov` and `opa` from PATH → run is blocked, not silently passed
 

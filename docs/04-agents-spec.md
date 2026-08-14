@@ -36,8 +36,10 @@ class BaseAgent(ABC):
 
 ## 4.1 Architect Agent — `agents/architect.py` [Phase 1]
 
-**Job:** understand the repo without an LLM. Fast (< 1s on a few-hundred-file repo),
-deterministic, and the foundation everything else builds on.
+**Job:** understand the repo with deterministic static analysis. Fast (< 1s on a
+few-hundred-file repo), and the foundation everything else builds on. An optional LLM
+pass at the end turns the structured result into a plain-English summary for the
+dashboard — see §4.1b — but the analysis itself never depends on a model call.
 
 ### Inputs → Outputs
 
@@ -195,6 +197,33 @@ highest-signal source and costs nothing.
 | Binary file with source extension | catch `UnicodeDecodeError`, skip |
 | No entrypoint found | `entrypoint=""` — Smith asks the LLM to infer, or template guesses |
 
+---
+
+### 4.1b — LLM architecture summary (new — always runs)
+
+**Job:** turn the structured `RepoAnalysis` into two or three sentences a human reads on
+the project page: what this app is, its main entrypoint, and what its most-imported
+module suggests about its shape. This is pure narration on top of data that is already
+fully computed — the LLM never contributes to `language`, `framework`, `critical_files`,
+or any field the rest of the pipeline depends on.
+
+```python
+ARCHITECT_SUMMARY_PROMPT = """Given this repository analysis, write a 2-3 sentence
+plain-English summary a developer seeing this project for the first time would find
+useful. Mention the stack, the entrypoint, and anything notable about the dependency
+graph (e.g. a heavily-shared module, a circular import, multiple detected services).
+
+{analysis_json}
+
+Return only the summary text. No preamble, no markdown.
+"""
+```
+
+This runs unconditionally — the product is online by design (`01-architecture.md`
+§1.1), so there is no "offline, skip the summary" branch to write. On an API failure it
+degrades to an empty `architecture_summary` and the run continues; it is cosmetic, never
+gating.
+
 ### Acceptance test
 
 ```bash
@@ -231,7 +260,7 @@ analysis
    │
    ├─► select few-shot examples (match on language+framework)
    ├─► build prompt (system + analysis JSON + examples + hard requirements)
-   ├─► LLM call, temperature=0.1, format=json
+   ├─► Claude call (claude-opus-5), temperature=0.1, format=json
    │
    ├─► strip markdown fences, extract JSON object
    ├─► Pydantic: GeneratedArtifacts  ──── ok ──►  generated_by="llm"
@@ -245,8 +274,11 @@ analysis
    └─► TEMPLATE fallback ──────────────►  generated_by="template"
 ```
 
-**The template fallback is not a nicety — it is the reason your demo works.**
-Ollama can be slow, cold, or in a bad mood. The run must always produce artifacts.
+**The template fallback is not a nicety — it is the reason your demo works.** A hosted
+API can rate-limit you, time out, or occasionally refuse a request outright. This is
+about resilience, not offline support — the product is online by design
+(`01-architecture.md` §1.1) — but a transient API blip must never break a customer's
+deploy. The run must always produce artifacts.
 
 ### Hard requirements injected into every prompt
 
@@ -330,8 +362,9 @@ Return corrected JSON matching the schema exactly. Output ONLY the JSON object.
 
 ### Analysis trimming — important
 
-Do **not** dump the whole `RepoAnalysis` into the prompt. The graph can be thousands of
-nodes and will blow the 8B model's context window. Send only:
+Do **not** dump the whole `RepoAnalysis` into the prompt. Claude's context window is
+large, but the graph can be thousands of nodes — sending all of it wastes tokens, adds
+latency, and buries the signal the model actually needs. Send only:
 
 ```python
 {
@@ -446,7 +479,10 @@ Generate for the FastAPI fixture, assert:
 ## 4.3 Security Warden — `agents/warden.py` [Phase 3]
 
 **Job:** prove the artifacts are safe *before* anything executes. This is the pillar of
-the pitch. It is also entirely deterministic — no LLM.
+the pitch, and **the pass/fail verdict itself is entirely deterministic — Checkov and OPA
+only, never the LLM.** An optional LLM pass attaches a plain-English `explanation` to
+each finding for the dashboard (§4.3b), but it cannot change whether a finding exists or
+whether the run is blocked. This split is deliberate — see `01-architecture.md` §1.9.
 
 ### Inputs → Outputs
 
@@ -457,8 +493,9 @@ out:  state.security  (SecurityReport)
 
 ### Step 1 — write artifacts to disk
 
-Checkov and OPA are file-based. Write to `~/.deploymint/artifacts/{run_id}/` first.
-**Never** into the user's repo.
+Checkov and OPA are file-based. Write to `/workspace/{project}/.deploymint/{run_id}/`
+first — always under the mounted projects volume, per `01-architecture.md` §1.7.
+**Never** overwrite files in the user's actual project.
 
 ### Step 2 — Checkov (subprocess, per decision #9)
 
@@ -681,9 +718,34 @@ WARN     = {"high", "medium", "low", "info"}
 passed = not any(f["severity"] in BLOCKING for f in findings)
 ```
 
-Start with **critical-only blocking**. If `high` blocks too, an 8B model's output will
-be rejected most of the time and your demo becomes a demo of failure. Make the threshold
+Start with **critical-only blocking**. Claude's output is high quality, but `high`-level
+findings (missing a probe, a loose resource limit) are common enough in a first draft
+that blocking on them turns every demo into a demo of failure. Make the threshold
 configurable (`settings.block_severity`) so you can tighten it later and show it off.
+
+---
+
+### 4.3b — LLM finding explanations (new — optional, non-gating)
+
+**Job:** for each `critical` or `high` finding, generate one sentence explaining *why it
+matters* in plain language, to go next to the raw Checkov/Rego message in the dashboard.
+Cap it to `critical`/`high` findings only — a `medium`/`low`/`info` finding doesn't need
+narration, and capping the count keeps the added latency and cost small and predictable.
+
+```python
+FINDING_EXPLANATION_PROMPT = """A security scanner flagged this issue in a generated
+deployment artifact:
+
+id: {id}
+message: {message}
+
+In one sentence, explain the concrete risk to someone who isn't a security expert.
+Do not restate the message — say what could actually go wrong.
+"""
+```
+
+This populates `Finding.explanation` (see the schema in `01-architecture.md` §1.5). It
+never runs before the verdict is computed, and a failure here never changes `passed`.
 
 ### Degradation
 
@@ -727,8 +789,9 @@ out:  appends to state.security.findings; may flip security.passed
 
 ### Two layers
 
-**Layer 1 — deterministic probes.** These always run, regardless of LLM availability.
-This is what makes the agent trustworthy.
+**Layer 1 — deterministic probes.** These always run and block on their own, independent
+of the LLM layer entirely. This is what makes the agent trustworthy even if the API call
+in Layer 2 fails.
 
 ```python
 PROBES = [
@@ -805,8 +868,13 @@ If you find nothing, return {"findings": []}. An empty list is a valid, expected
 """
 ```
 
-That last line matters. Without it, an 8B model will invent findings to seem useful, and
-your Red Team agent becomes a false-positive generator that blocks every deploy.
+That last line matters regardless of model quality — without it, a model asked to find
+problems will invent findings to seem useful, and your Red Team agent becomes a
+false-positive generator that blocks every deploy. Layer 2 runs on **every single run,
+unconditionally** — there is no "skip if the model is unavailable" branch to write,
+because the product is online by design. If the API call itself fails, that failure is
+caught and logged; Layer 1's deterministic probes have already made their own blocking
+decision independently by that point.
 
 ### Blocking rule
 
@@ -904,6 +972,28 @@ that framing far more than an overclaim.
 setup script (`kubectl apply -f https://.../components.yaml` plus the
 `--kubelet-insecure-tls` patch), or degrade to restart-count-only. Decide before Day 12.
 
+### 4.6b — LLM anomaly explanation (new — only runs when an anomaly fires)
+
+**Job:** when a deterministic trigger or IsolationForest flags an anomaly, turn the raw
+signal into one sentence a non-expert can act on — "the pod is crash-looping, most likely
+because the container's health check hits a port the app isn't actually listening on,"
+rather than a bare `CrashLoopBackOff`. This runs *after* the rollback decision has
+already been made deterministically — it explains the decision, it doesn't make it.
+
+```python
+ANOMALY_EXPLANATION_PROMPT = """This deployment triggered a rollback.
+
+Trigger: {reason}
+Recent pod events: {events}
+Recent logs (tail): {logs}
+
+In one or two sentences, state the most likely root cause in plain language.
+"""
+```
+
+Populates `Deployment.anomaly_explanation`. Since this only fires on the rollback path —
+not on every run — the added latency and cost are naturally rare.
+
 ---
 
 ## 4.7 Remediator — `agents/remediator.py` [Phase 6]
@@ -972,7 +1062,8 @@ question → LLM classifies intent → deterministic SQL/dict lookup produces nu
 ```
 
 Intents: `most_expensive`, `total_spend`, `trend`, `by_service`, `optimize`, `unknown`.
-Ship a keyword fallback for each so it works with Ollama down.
+Ship a keyword fallback for each so a transient API failure never breaks the answer —
+this is the same resilience pattern as the Smith's template fallback, not an offline mode.
 
 The MVP requirement is one question: *"Which service costs the most?"* Answer it with
 the sample JSON, and make sure the number in the reply matches the number in the table.
@@ -1010,5 +1101,31 @@ agent that deploys on a misread is worse than one that asks.
 
 Multi-turn memory: store `(session_id, role, content)` in memory, cap at 10 turns, pass
 the last 4 as context. Stretch goal — a stateless router satisfies the MVP.
+
+---
+
+## 4.10 LLM usage policy — summary
+
+Every LLM call in this doc goes through one client in `core/llm.py`, default model
+`claude-opus-5`, called over the internet from inside the app container. There is no
+"offline mode" branch anywhere in the agents — the product is online by design
+(`01-architecture.md` §1.1) — and the fallback paths that remain (Smith's templates, the
+NL router's keyword matcher) exist purely for **API resilience**, not to support running
+without one.
+
+| Component | LLM call | Gates the outcome? |
+|---|---|---|
+| Architect (§4.1b) | architecture summary | no — cosmetic only |
+| Artifact Smith (§4.2) | generate the artifacts | **yes** — but validated + template-backstopped |
+| Security Warden (§4.3b) | per-finding explanation | no — verdict is Checkov/OPA only |
+| Red Team (§4.4) | adversarial critique | **capped** — can only add `high`, never `critical`, unless it matches a deterministic probe |
+| Execution Engine | none | n/a |
+| Observability Oracle (§4.6b) | anomaly explanation | no — rollback decision is deterministic |
+| Remediator | none | n/a |
+| FinOps (§4.8) | phrase the answer | no — numbers are always computed, never generated |
+| NL Router (§4.9) | intent classification | **soft** — low confidence asks for confirmation instead of acting |
+
+The rule that survives every one of these: **the LLM writes and explains; deterministic
+code decides and computes.**
 
 Next: `05-phase-1-foundation.md`.

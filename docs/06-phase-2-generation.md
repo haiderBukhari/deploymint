@@ -1,37 +1,44 @@
 # 06 — Phase 2: Artifact Generation (Days 3–4)
 
-**Goal:** the LLM writes a Dockerfile and Kubernetes manifests specific to the analyzed
+**Goal:** Claude writes a Dockerfile and Kubernetes manifests specific to the analyzed
 repo — validated, repaired on failure, and with a deterministic template fallback that
-guarantees the run always produces artifacts.
+guarantees the run always produces artifacts even if the API call itself fails.
 
 ---
 
-## Step 2.1 — Verify Ollama before writing any code
+## Step 2.1 — Verify the Anthropic API before writing any code
 
 ```bash
-curl -s localhost:11434/api/tags | python -m json.tool | head -30
+export ANTHROPIC_API_KEY=sk-ant-...
 ```
 
 ```bash
-ollama run llama3.1:8b "Return only JSON: {\"ok\": true}"
+source venv/bin/activate && python -c "
+import anthropic
+client = anthropic.Anthropic()
+r = client.messages.create(model='claude-opus-5', max_tokens=32,
+    messages=[{'role':'user','content':'Return only JSON: {\"ok\": true}'}])
+print(r.content[0].text)
+"
 ```
 
-If the second command returns prose around the JSON, that is **expected** and exactly why
-`extract_json()` exists. Do not try to prompt-engineer it away entirely.
+Expected: something very close to `{"ok": true}`, possibly with minor formatting around
+it — which is exactly why `extract_json()` in §2.2 still exists even with a strong model.
 
 ### Measure your latency now
 
 ```bash
-time ollama run llama3.1:8b "Write a Dockerfile for a Python FastAPI app. Output only the Dockerfile."
+time python -c "
+import anthropic
+anthropic.Anthropic().messages.create(model='claude-opus-5', max_tokens=1024,
+    messages=[{'role':'user','content':'Write a Dockerfile for a Python FastAPI app. Output only the Dockerfile.'}])
+"
 ```
 
-Note the wall time. On an M-series Mac this is typically 8–25 s. Your whole run will be
-roughly `smith_time + build_time + rollout_time`. If generation takes 40 s, set
-`llm_timeout` accordingly and consider `llama3.2` (2 GB, much faster) for the dev loop —
-you already have it pulled.
-
-**Dev tip that will save you hours:** add `DEPLOYMINT_MODEL=llama3.2` for iteration, and
-switch to `llama3.1:8b` for quality runs and the demo.
+Note the wall time — typically 3–8s for a response this size, dramatically faster and
+more reliable than an 8B local model. Your whole run is roughly
+`smith_time + build_time + rollout_time`; budget `llm_timeout` accordingly (120s is
+generous headroom, not an expectation).
 
 ---
 
@@ -39,14 +46,13 @@ switch to `llama3.1:8b` for quality runs and the demo.
 
 ```python
 # deploymint/core/llm.py
-import asyncio
 import json
 import re
-import httpx
+import anthropic
 
 from deploymint.config import get_settings
 
-FENCE_RE = re.compile(r"```(?:json|yaml|dockerfile)?\s*(.*?)```", re.DOTALL)
+FENCE_RE = re.compile(r"```(?:json)?\s*(.*?)```", re.DOTALL)
 
 
 class LLMError(RuntimeError):
@@ -57,55 +63,77 @@ class LLMUnavailable(LLMError):
     pass
 
 
+_client: anthropic.Anthropic | None = None
+
+
+def get_client() -> anthropic.Anthropic:
+    global _client
+    if _client is None:
+        s = get_settings()
+        if not s.anthropic_api_key:
+            raise LLMUnavailable("ANTHROPIC_API_KEY is not set")
+        _client = anthropic.Anthropic(api_key=s.anthropic_api_key)
+    return _client
+
+
 async def health() -> tuple[bool, str]:
-    s = get_settings()
+    import asyncio
     try:
-        async with httpx.AsyncClient(timeout=5) as c:
-            r = await c.get(f"{s.ollama_base_url}/api/tags")
-            r.raise_for_status()
-            models = [m["name"] for m in r.json().get("models", [])]
+        client = get_client()
+    except LLMUnavailable as e:
+        return False, str(e)
+    try:
+        await asyncio.to_thread(
+            client.messages.create,
+            model=get_settings().model, max_tokens=8,
+            messages=[{"role": "user", "content": "ok"}],
+        )
+        return True, f"{get_settings().model} reachable"
+    except anthropic.AuthenticationError:
+        return False, "ANTHROPIC_API_KEY is set but invalid"
+    except anthropic.APIConnectionError as e:
+        return False, f"cannot reach the Anthropic API: {e}"
     except Exception as e:
-        return False, f"Ollama unreachable at {s.ollama_base_url}: {e}"
-
-    if not any(m.split(":")[0] == s.model.split(":")[0] for m in models):
-        return False, f"model '{s.model}' not pulled. Run: ollama pull {s.model}"
-    return True, f"{s.model} ready"
+        return False, str(e)[:200]
 
 
-async def complete(
-    system: str,
-    user: str,
-    *,
-    temperature: float | None = None,
-    json_mode: bool = False,
-    timeout: int | None = None,
-) -> str:
-    """Single completion against Ollama's /api/chat."""
+async def complete(system: str, user: str, *, max_tokens: int = 4000,
+                    temperature: float = 0.1, json_mode: bool = False) -> str:
+    """Single completion. Runs the blocking SDK call in a thread — see
+    01-architecture.md §1.6 on why every blocking call must be wrapped this way."""
+    import asyncio
     s = get_settings()
-    payload = {
-        "model": s.model,
-        "messages": [
-            {"role": "system", "content": system},
-            {"role": "user", "content": user},
-        ],
-        "stream": False,
-        "options": {"temperature": temperature if temperature is not None else s.llm_temperature},
-    }
+    client = get_client()
+
+    sys_prompt = system
     if json_mode:
-        payload["format"] = "json"
+        sys_prompt += "\n\nReturn ONLY a JSON object. No markdown fences, no prose."
 
     try:
-        async with httpx.AsyncClient(timeout=timeout or s.llm_timeout) as c:
-            r = await c.post(f"{s.ollama_base_url}/api/chat", json=payload)
-            r.raise_for_status()
-            return r.json()["message"]["content"]
-    except httpx.ConnectError as e:
-        raise LLMUnavailable(f"cannot reach Ollama at {s.ollama_base_url}") from e
-    except httpx.TimeoutException as e:
-        raise LLMError(f"model timed out after {timeout or s.llm_timeout}s") from e
+        response = await asyncio.wait_for(
+            asyncio.to_thread(
+                client.messages.create,
+                model=s.model, max_tokens=max_tokens, temperature=temperature,
+                system=sys_prompt,
+                messages=[{"role": "user", "content": user}],
+            ),
+            timeout=s.llm_timeout,
+        )
+    except anthropic.RateLimitError as e:
+        raise LLMUnavailable(f"rate limited: {e}") from e
+    except anthropic.APIConnectionError as e:
+        raise LLMUnavailable(f"cannot reach the API: {e}") from e
+    except anthropic.APIStatusError as e:
+        raise LLMError(f"api error {e.status_code}: {e.message}") from e
+    except TimeoutError as e:
+        raise LLMError(f"timed out after {s.llm_timeout}s") from e
+
+    return response.content[0].text
 
 
 def extract_json(text: str) -> dict:
+    """Even a strong model occasionally wraps JSON in fences or a sentence of prose.
+    Dig it out rather than trying to prompt-engineer this away entirely."""
     text = text.strip()
     m = FENCE_RE.search(text)
     if m:
@@ -121,25 +149,26 @@ async def complete_json(system: str, user: str, **kw) -> dict:
     return extract_json(raw)
 ```
 
-### Why raw `httpx` instead of `langchain-ollama`
+### Why the official `anthropic` SDK, not raw HTTP
 
-- `format: "json"` is an Ollama-native flag that dramatically improves structured output.
-  Going direct means it is one line, not a wrapper hunt.
-- One fewer abstraction between you and the error message. When generation fails on
-  Day 4, you want the actual HTTP response.
-- LangChain is still used for LangGraph in Phase 5 — you are not avoiding the dependency,
-  just not routing your critical path through it.
+There's no reason to hand-roll HTTP calls when a maintained, typed SDK exists — it
+handles retries on 429/5xx, timeouts, and error typing for you. The only custom pieces
+are `extract_json()` (a strong model still occasionally wraps output) and the
+`asyncio.to_thread` wrapper (the SDK's sync client would otherwise block the event loop —
+see `01-architecture.md` §1.6).
 
-**LiteLLM swap (stretch goal):** add `provider: str = "ollama"` to settings and branch
-inside `complete()`. Because everything calls `complete()`, that one branch is the entire
-"zero-code model swap" feature from the proposal. Build the seam now, the branch later.
+**One credential, one place it lives:** `ANTHROPIC_API_KEY` is read from the environment
+by `get_settings()`, which in the running container comes from `.env` via
+`docker-compose.yml` (`02-repo-layout.md` §2.4). It is never passed by the end user
+per-request, never stored in the database, and never logged.
 
 ---
 
 ## Step 2.3 — Prompts (one file, versioned)
 
 Create `deploymint/core/prompts.py` with `SMITH_SYSTEM`, `SMITH_USER`, `SMITH_REPAIR`,
-`HARD_REQUIREMENTS`, `REDTEAM_SYSTEM`, `INTENT_SYSTEM`, `FINOPS_ANSWER` — full text in
+`HARD_REQUIREMENTS`, `REDTEAM_SYSTEM`, `INTENT_SYSTEM`, `ARCHITECT_SUMMARY_PROMPT`,
+`FINDING_EXPLANATION_PROMPT`, `ANOMALY_EXPLANATION_PROMPT` — full text across
 `04-agents-spec.md`.
 
 Add a version constant and store it on each run:
@@ -161,11 +190,10 @@ This costs one line and saves real confusion later.
 {"language":"python","framework":"fastapi","package_manager":"pip","dockerfile":"...","k8s_deployment":"...","k8s_service":"...","notes":"multi-stage, non-root, healthcheck"}
 ```
 
-**15–25 examples is enough.** The proposal says 150–200; that is a data-collection
-project, not a two-week MVP feature. With retrieval by `(language, framework)` and
-2 examples injected per prompt, more examples add nothing to an 8B model's context budget.
-
-Selection:
+**15–25 examples is enough.** With a strong model and retrieval by `(language,
+framework)`, 2 examples injected per prompt already anchor the output shape reliably —
+more examples in the library don't mean more get used per call, they just improve the
+chance of an exact-stack match.
 
 ```python
 def select_fewshot(language: str, framework: str, k: int = 2) -> list[dict]:
@@ -176,12 +204,9 @@ def select_fewshot(language: str, framework: str, k: int = 2) -> list[dict]:
     return (exact + same_lang + generic)[:k]
 ```
 
-Write your own examples — they must satisfy all 12 hard requirements, because the model
-will copy their structure. A sloppy few-shot example produces sloppy output; this is the
-highest-leverage 90 minutes in Phase 2.
-
-**Keep them small.** Two full artifact sets is ~2000 tokens. Three is pushing an 8B
-model's useful attention. Prefer 2.
+Write your own examples — they must satisfy all 12 hard requirements from
+`04-agents-spec.md` §4.2, because the model will copy their structure. A sloppy few-shot
+example produces sloppy output; this is the highest-leverage 90 minutes in Phase 2.
 
 ---
 
@@ -213,12 +238,14 @@ REGISTRY = {
 }
 ```
 
-### Build templates first. Three reasons.
+### Build templates first. Three reasons — none of them change with a stronger model.
 
 1. They define what "correct output" looks like — and they become your few-shot examples.
-2. They give you a working end-to-end pipeline **today**, without waiting on model quality.
-   You can move to Phase 3 and 4 while generation quality is still rough.
-3. They are the safety net. If the model is unavailable during your demo, nobody knows.
+2. They give you a working end-to-end pipeline **today**, without waiting on prompt
+   quality. You can move to Phase 3 and 4 while generation is still rough.
+3. They are the safety net. If the Anthropic API is rate-limited or down during your
+   demo, nobody watching the terminal needs to know — the pipeline still produces
+   correct, deployable output.
 
 The FastAPI template (full text in `04-agents-spec.md` §4.2) must produce a Dockerfile
 that actually builds. **Verify manually before moving on:**
@@ -242,7 +269,9 @@ docker run --rm -d -p 8099:8000 --name dmtest dm-template-test && sleep 3 && cur
 ```
 
 **If this does not print `{"status":"ok"}`, stop and fix the template.** Every downstream
-phase assumes a buildable, runnable image.
+phase assumes a buildable, runnable image. (This `docker build`/`docker run` pair works
+identically whether you're running it from your local venv or from inside the app
+container talking to the mounted host socket — see `08-phase-4-execution.md` §8.1.)
 
 ---
 
@@ -250,7 +279,6 @@ phase assumes a buildable, runnable image.
 
 ```python
 # deploymint/agents/smith.py
-import asyncio
 from pydantic import ValidationError
 
 from deploymint.agents.base import BaseAgent
@@ -285,7 +313,7 @@ class ArtifactSmithAgent(BaseAgent):
             err = str(e)[:300]
             try:
                 artifacts = await self._repair(analysis, project_name, image, err)
-                how = "llm+repair"
+                how = "llm"
             except Exception as e2:
                 err = f"{err} | repair failed: {str(e2)[:200]}"
 
@@ -300,7 +328,7 @@ class ArtifactSmithAgent(BaseAgent):
                 "k8s_deployment": artifacts.k8s_deployment,
                 "k8s_service": artifacts.k8s_service,
                 "generated_by": how,
-                "model_used": s.model if how != "template" else "none",
+                "model_used": s.model if how == "llm" else "none",
             }
         }
         if err and how == "template":
@@ -339,6 +367,11 @@ class ArtifactSmithAgent(BaseAgent):
         return _inject_image(art, image, project_name)
 ```
 
+Note there is no `"llm+repair"` distinction in `generated_by` anymore — both a clean
+first pass and a successful repair are just `"llm"`. The repair loop is bookkeeping for
+reliability, not something worth surfacing to the user; what matters to them is whether
+Claude wrote it or the template did.
+
 ### `_inject_image` — do not trust the model with the image tag
 
 ```python
@@ -360,13 +393,14 @@ def _inject_image(art: GeneratedArtifacts, image: str, name: str) -> GeneratedAr
     return art
 ```
 
-The model will happily write `image: my-app:latest` — which does not exist in your kind
+The model will happily write `image: my-app:latest` — which does not exist on the
 cluster. Post-processing the image tag deterministically removes an entire class of
-"the pod won't start" bugs. **Do this. It is the single highest-value 20 lines in Phase 2.**
+"the pod won't start" bugs. **Do this. It is the single highest-value 20 lines in Phase 2,**
+and it has nothing to do with model quality — even a perfect model doesn't know the
+run-specific tag your Execution Engine is about to build.
 
-Also make sure label selectors match between Deployment and Service — if the model
-generates `app: myapp` in one and `app: my-app` in the other, the Service routes to
-nothing. Normalize both to `app: {name}` in the injection step.
+Also make sure label selectors match between Deployment and Service — normalize both to
+`app: {name}` in the injection step, or the Service routes to nothing.
 
 ---
 
@@ -411,7 +445,7 @@ ANALYSIS = {
     "file_count": 6,
 }
 BASE = {"run_id": "run_test", "project_id": 1, "project_name": "t",
-        "repo_path": "/tmp", "force": False, "errors": [], "current_node": "",
+        "repo_path": "/workspace/t", "force": False, "errors": [], "current_node": "",
         "analysis": ANALYSIS}
 
 
@@ -424,9 +458,9 @@ async def test_falls_back_to_template_when_llm_returns_garbage():
 
 
 @pytest.mark.asyncio
-async def test_falls_back_when_ollama_is_down():
+async def test_falls_back_when_api_is_unreachable():
     from deploymint.core.llm import LLMUnavailable
-    with patch("deploymint.core.llm.complete", side_effect=LLMUnavailable("down")):
+    with patch("deploymint.core.llm.complete", side_effect=LLMUnavailable("rate limited")):
         out = await ArtifactSmithAgent().run(dict(BASE))
     assert out["artifacts"]["generated_by"] == "template"
     assert out["artifacts"]["dockerfile"]
@@ -446,7 +480,10 @@ async def test_strips_markdown_fences():
 ```
 
 The first two tests are the important ones. They assert the property your demo depends
-on: **the pipeline never returns empty artifacts, no matter what the model does.**
+on: **the pipeline never returns empty artifacts, no matter what the model does or
+whether the API is reachable at all.** Mocking `llm.complete` directly (rather than
+mocking the Anthropic SDK client) keeps these tests fast and independent of network
+access or a real API key — they should pass in CI with no `ANTHROPIC_API_KEY` set.
 
 ---
 
@@ -473,12 +510,15 @@ curl -s localhost:8000/api/runs/<run_id>/artifacts/k8s-deployment.yaml | kubectl
 **Pass criteria:**
 
 - Run reaches `status=success` with `artifacts` populated
-- `generated_by` is `llm` or `llm+repair` at least once in five attempts
-- Docker build of the **LLM-generated** Dockerfile succeeds
+- `generated_by` is `llm` on essentially every attempt (Claude's output quality means
+  the template fallback should be rare in normal operation — unlike an 8B local model
+  where it fired routinely)
+- Docker build of the **Claude-generated** Dockerfile succeeds
 - `kubectl apply --dry-run=client` accepts both manifests
-- Killing Ollama (`pkill ollama`) and re-running still produces a complete artifact set
-  with `generated_by: "template"`
-- `pytest tests/test_smith.py` green
+- Unsetting `ANTHROPIC_API_KEY` and re-running still produces a complete artifact set
+  with `generated_by: "template"` — resilience, not offline support, but the run must
+  still succeed
+- `pytest tests/test_smith.py` green with no `ANTHROPIC_API_KEY` in the test environment
 
 Tick **Phase 2**. Next: `07-phase-3-security.md`.
 
@@ -488,16 +528,17 @@ Tick **Phase 2**. Next: `07-phase-3-security.md`.
 
 | Task | Hours |
 |---|---|
-| LLM layer + extract_json + health | 2.0 |
+| LLM layer (Anthropic SDK) + extract_json + health | 1.5 |
 | Prompts | 1.5 |
 | Templates (4 stacks) + manual build verification | 4.0 |
 | Few-shot curation (15–25 examples) | 2.0 |
-| Smith agent + repair loop + image injection | 3.0 |
+| Smith agent + repair loop + image injection | 2.5 |
 | Runner + run API endpoints | 2.0 |
 | Tests | 2.0 |
-| Prompt iteration (budget for this — it is real) | 2.0 |
-| **Total** | **~18.5 h (2 days)** |
+| Prompt iteration | 1.5 |
+| **Total** | **~17 h (2 days)** |
 
-**Prompt iteration is a real line item.** Your first prompt will produce output that
-fails validation ~50% of the time on an 8B model. Expect 4–6 rounds. The fastest lever
-is better few-shot examples, not longer instructions.
+**Prompt iteration is still a real line item, just a smaller one.** Claude's first-pass
+output rate against the schema is much higher than an 8B local model's, but budget at
+least a couple of rounds — the highest-leverage lever remains better few-shot examples,
+not longer instructions.

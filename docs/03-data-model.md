@@ -2,7 +2,14 @@
 
 ## 3.1 Database schema
 
-Four tables. SQLite. Created by `Base.metadata.create_all()` on server start.
+Four tables, **Postgres 16**, running as the bundled `db` service from
+`02-repo-layout.md` §2.4. Created by `Base.metadata.create_all()` on app startup — no
+Alembic yet (pre-1.0, schema still moves; see `01-architecture.md` §1.4 decision 5).
+
+The app never manages Postgres itself — Compose owns the container, the volume, and the
+healthcheck. The app just connects to `db:5432` using the `DATABASE_URL` Compose already
+injected as an environment variable (`02-repo-layout.md` §2.4). There is nothing here for
+an end user to configure.
 
 ### `projects`
 
@@ -10,14 +17,14 @@ Four tables. SQLite. Created by `Base.metadata.create_all()` on server start.
 |---|---|---|
 | `id` | INTEGER PK | |
 | `name` | TEXT NOT NULL UNIQUE | slug-safe; used in image tags |
-| `repo_path` | TEXT NOT NULL | **resolved absolute path** — validated by sandbox |
+| `repo_path` | TEXT NOT NULL | **always under `/workspace`** — validated by sandbox |
 | `language` | TEXT | filled by first analyze |
 | `framework` | TEXT | |
 | `entrypoint` | TEXT | |
 | `exposed_port` | INTEGER | default 8000 |
-| `analysis` | JSON | full `RepoAnalysis` from the last analyze |
-| `created_at` | DATETIME | |
-| `last_analyzed_at` | DATETIME NULL | |
+| `analysis` | JSONB | full `RepoAnalysis` from the last analyze |
+| `created_at` | TIMESTAMPTZ | |
+| `last_analyzed_at` | TIMESTAMPTZ NULL | |
 
 ### `runs`
 
@@ -29,18 +36,24 @@ Four tables. SQLite. Created by `Base.metadata.create_all()` on server start.
 | `current_node` | TEXT | which agent is active right now (drives the UI spinner) |
 | `trigger` | TEXT | `ui` \| `cli` \| `chat` \| `api` |
 | `force` | BOOLEAN | security gate bypassed |
-| `analysis` | JSON | snapshot at run time |
-| `artifacts` | JSON | `Artifacts` TypedDict |
-| `security` | JSON | `SecurityReport` |
-| `deployment` | JSON | `Deployment` |
-| `cost` | JSON | `CostReport` |
-| `errors` | JSON | list[str] |
-| `model_used` | TEXT | e.g. `ollama/llama3.1:8b` |
+| `analysis` | JSONB | snapshot at run time |
+| `artifacts` | JSONB | `Artifacts` TypedDict |
+| `security` | JSONB | `SecurityReport` |
+| `deployment` | JSONB | `Deployment` |
+| `cost` | JSONB | `CostReport` |
+| `errors` | JSONB | list[str] |
+| `model_used` | TEXT | e.g. `claude-opus-5` |
+| `input_tokens` / `output_tokens` | INTEGER NULL | for the per-run LLM cost readout in the UI |
 | `duration_ms` | INTEGER NULL | |
-| `created_at` | DATETIME | |
-| `completed_at` | DATETIME NULL | |
+| `created_at` | TIMESTAMPTZ | |
+| `completed_at` | TIMESTAMPTZ NULL | |
 
 Index: `(project_id, created_at DESC)` — the run-history query.
+
+`JSONB`, not plain `JSON` — Postgres's binary JSON type. It costs nothing extra to use
+and means a query like *"every run blocked by `DM_ROOT_USER`"* can be a real indexed
+query later (`security @> '{"passed": false}'` with a GIN index) instead of a full scan,
+without changing a single line of Python. Same `Mapped[dict]` column type either way.
 
 ### `events` — the live timeline, and the replay source
 
@@ -50,13 +63,16 @@ Index: `(project_id, created_at DESC)` — the run-history query.
 | `run_id` | TEXT FK → runs.id | |
 | `seq` | INTEGER | monotonic per run; the WS client resumes from `?since=seq` |
 | `type` | TEXT | `architect.start`, `execution.log`, `warden.finding`, … |
-| `payload` | JSON | shape depends on type |
-| `ts` | DATETIME | |
+| `payload` | JSONB | shape depends on type |
+| `ts` | TIMESTAMPTZ | |
 
-Index: `(run_id, seq)`.
+Index: `UNIQUE (run_id, seq)` — makes the sequence contract enforceable, not
+aspirational; a double-emit bug becomes an immediate constraint violation instead of a
+duplicated line in someone's terminal.
 
 **Why persist events:** a browser refresh mid-run must not lose the timeline. The WS
-handler replays rows `seq > since` from this table, then attaches to the live queue.
+handler replays rows `seq > since` from this table, then attaches to the live in-memory
+queue described in `01-architecture.md` §1.6.
 
 ### `audit_logs` — the tamper-evident chain
 
@@ -72,7 +88,7 @@ handler replays rows `seq > since` from this table, then attaches to the live qu
 | `exit_code` | INTEGER NULL | |
 | `prev_hash` | TEXT | hash of the previous row in this run |
 | `hash` | TEXT | `sha256(prev_hash + run_id + seq + agent + action + command + output)` |
-| `ts` | DATETIME | |
+| `ts` | TIMESTAMPTZ | |
 
 ### The hash chain — implement it, it takes 20 minutes
 
@@ -99,11 +115,10 @@ def compute_hash(prev_hash: str, row: dict) -> str:
 Verification endpoint `GET /api/runs/{id}/audit/verify` recomputes the chain and returns
 `{"valid": bool, "broken_at_seq": int | null}`.
 
-This is **not** cryptographic signing (no key, no external anchor) — an attacker with
-write access to the DB could recompute the whole chain. Say so honestly. What it *does*
-give you: tamper **evidence** against accidental edits and partial corruption, and a
-verifiable ordering. That is a real, defensible claim. Claiming more would be
-overselling, and a technical reviewer will catch it immediately.
+This is **not** cryptographic signing (no key, no external anchor) — someone with write
+access to Postgres could recompute the whole chain. Say so honestly. What it *does* give
+you: tamper **evidence** against accidental edits and partial corruption, and a
+verifiable ordering. That is a real, defensible claim.
 
 ---
 
@@ -113,8 +128,9 @@ overselling, and a technical reviewer will catch it immediately.
 # deploymint/db/models.py
 from datetime import datetime, timezone
 from sqlalchemy import (
-    String, Integer, DateTime, Text, Boolean, JSON, ForeignKey, Index,
+    String, Integer, DateTime, Text, Boolean, ForeignKey, Index,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -136,9 +152,9 @@ class Project(Base):
     framework: Mapped[str | None] = mapped_column(String(50))
     entrypoint: Mapped[str | None] = mapped_column(String(255))
     exposed_port: Mapped[int] = mapped_column(Integer, default=8000)
-    analysis: Mapped[dict | None] = mapped_column(JSON)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
-    last_analyzed_at: Mapped[datetime | None] = mapped_column(DateTime)
+    analysis: Mapped[dict | None] = mapped_column(JSONB)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    last_analyzed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     runs: Mapped[list["Run"]] = relationship(
         back_populates="project", cascade="all, delete-orphan"
@@ -149,23 +165,25 @@ class Run(Base):
     __tablename__ = "runs"
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True)
-    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id"))
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"))
     status: Mapped[str] = mapped_column(String(20), default="pending", index=True)
     current_node: Mapped[str | None] = mapped_column(String(50))
     trigger: Mapped[str] = mapped_column(String(20), default="api")
     force: Mapped[bool] = mapped_column(Boolean, default=False)
 
-    analysis: Mapped[dict | None] = mapped_column(JSON)
-    artifacts: Mapped[dict | None] = mapped_column(JSON)
-    security: Mapped[dict | None] = mapped_column(JSON)
-    deployment: Mapped[dict | None] = mapped_column(JSON)
-    cost: Mapped[dict | None] = mapped_column(JSON)
-    errors: Mapped[list | None] = mapped_column(JSON, default=list)
+    analysis: Mapped[dict | None] = mapped_column(JSONB)
+    artifacts: Mapped[dict | None] = mapped_column(JSONB)
+    security: Mapped[dict | None] = mapped_column(JSONB)
+    deployment: Mapped[dict | None] = mapped_column(JSONB)
+    cost: Mapped[dict | None] = mapped_column(JSONB)
+    errors: Mapped[list | None] = mapped_column(JSONB, default=list)
 
     model_used: Mapped[str | None] = mapped_column(String(100))
+    input_tokens: Mapped[int | None] = mapped_column(Integer)
+    output_tokens: Mapped[int | None] = mapped_column(Integer)
     duration_ms: Mapped[int | None] = mapped_column(Integer)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
-    completed_at: Mapped[datetime | None] = mapped_column(DateTime)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     project: Mapped[Project] = relationship(back_populates="runs")
 
@@ -176,20 +194,20 @@ class Event(Base):
     __tablename__ = "events"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    run_id: Mapped[str] = mapped_column(ForeignKey("runs.id"), index=True)
+    run_id: Mapped[str] = mapped_column(ForeignKey("runs.id", ondelete="CASCADE"), index=True)
     seq: Mapped[int] = mapped_column(Integer)
     type: Mapped[str] = mapped_column(String(50))
-    payload: Mapped[dict] = mapped_column(JSON, default=dict)
-    ts: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    payload: Mapped[dict] = mapped_column(JSONB, default=dict)
+    ts: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
-    __table_args__ = (Index("ix_events_run_seq", "run_id", "seq"),)
+    __table_args__ = (Index("ix_events_run_seq", "run_id", "seq", unique=True),)
 
 
 class AuditLog(Base):
     __tablename__ = "audit_logs"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    run_id: Mapped[str] = mapped_column(ForeignKey("runs.id"), index=True)
+    run_id: Mapped[str] = mapped_column(ForeignKey("runs.id", ondelete="CASCADE"), index=True)
     seq: Mapped[int] = mapped_column(Integer)
     agent: Mapped[str] = mapped_column(String(50))
     action: Mapped[str] = mapped_column(String(50))
@@ -198,16 +216,16 @@ class AuditLog(Base):
     exit_code: Mapped[int | None] = mapped_column(Integer)
     prev_hash: Mapped[str] = mapped_column(String(64))
     hash: Mapped[str] = mapped_column(String(64))
-    ts: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    ts: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
-    __table_args__ = (Index("ix_audit_run_seq", "run_id", "seq"),)
+    __table_args__ = (Index("ix_audit_run_seq", "run_id", "seq", unique=True),)
 ```
 
-### `database.py` — note the WAL pragma
+### `database.py` — connecting to the compose `db` service
 
 ```python
 # deploymint/db/database.py
-from sqlalchemy import create_engine, event
+from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, Session
 from deploymint.config import get_settings
 from deploymint.db.models import Base
@@ -220,21 +238,10 @@ def get_engine():
     global _engine
     if _engine is None:
         s = get_settings()
-        _engine = create_engine(
-            s.database_url,
-            connect_args={"check_same_thread": False},
-            echo=s.sql_echo,
-        )
-
-        @event.listens_for(_engine, "connect")
-        def _set_pragmas(dbapi_conn, _):
-            cur = dbapi_conn.cursor()
-            cur.execute("PRAGMA journal_mode=WAL")     # concurrent read + write
-            cur.execute("PRAGMA synchronous=NORMAL")   # fast enough, still durable
-            cur.execute("PRAGMA foreign_keys=ON")
-            cur.execute("PRAGMA busy_timeout=5000")    # wait, don't error, on lock
-            cur.close()
-
+        # DATABASE_URL is injected by docker-compose.yml — see 02-repo-layout.md §2.4.
+        # No pragmas, no WAL mode: this is real Postgres, running as its own service,
+        # with its own connection pooling and its own concurrency story.
+        _engine = create_engine(s.database_url, pool_pre_ping=True, echo=s.sql_echo)
     return _engine
 
 
@@ -258,13 +265,18 @@ def get_db():
         db.close()
 ```
 
-**`busy_timeout=5000` matters.** Without it, a WebSocket read racing an agent write
-raises `database is locked` and the run appears to crash. This one line prevents a
-confusing multi-hour debugging session in Phase 5.
+**`pool_pre_ping=True` replaces the old WAL/`busy_timeout` pragmas entirely.** Those
+existed to work around SQLite being a single file with no real concurrency control.
+Postgres already handles concurrent readers and writers correctly; the only thing worth
+guarding against is a stale pooled connection if the `db` container ever restarts —
+`pool_pre_ping` checks the connection is alive before handing it out, and transparently
+reconnects if not.
 
-**Lazy globals matter too.** `get_settings()` reads `DEPLOYMINT_HOME` at call time, so
-tests can point it at a tmpdir. If you build the engine at import time, every test
-shares your real database.
+**Lazy globals still matter, for a different reason now.** `get_settings()` reads
+`DATABASE_URL` from the environment at call time. Tests set this to a throwaway Postgres
+database (see `12-testing-strategy.md`) rather than a tmp SQLite file, but the pattern —
+never build the engine at import time — is unchanged and for the same reason: so tests
+don't accidentally point at the real `db` service.
 
 ---
 
@@ -278,7 +290,7 @@ from pydantic import BaseModel, Field, field_validator
 
 class ProjectCreate(BaseModel):
     name: str = Field(min_length=1, max_length=100)
-    repo_path: str
+    repo_path: str    # must resolve under /workspace — see core/sandbox.py
 
     @field_validator("name")
     @classmethod
@@ -308,9 +320,13 @@ class ProjectRead(BaseModel):
 # deploymint/schemas/run.py
 from datetime import datetime
 from typing import Any, Literal
-from pydantic import BaseModel
+from pydantic import BaseModel, computed_field
 
 RunStatus = Literal["pending", "running", "success", "failed", "blocked", "cancelled"]
+
+# Claude Opus 5 pricing — $5/1M input, $25/1M output. Update if the model changes.
+_INPUT_PER_TOKEN = 5e-6
+_OUTPUT_PER_TOKEN = 25e-6
 
 
 class RunCreate(BaseModel):
@@ -331,11 +347,25 @@ class RunRead(BaseModel):
     cost: dict[str, Any] | None = None
     errors: list[str] = []
     model_used: str | None = None
+    input_tokens: int | None = None
+    output_tokens: int | None = None
     duration_ms: int | None = None
     created_at: datetime
     completed_at: datetime | None = None
 
     model_config = {"from_attributes": True}
+
+    @computed_field
+    @property
+    def llm_cost_usd(self) -> float | None:
+        """Surfacing the real per-run inference cost in the UI is a small, honest
+        demonstration of the FinOps thesis on the product itself. Ship it."""
+        if self.input_tokens is None:
+            return None
+        return round(
+            self.input_tokens * _INPUT_PER_TOKEN
+            + (self.output_tokens or 0) * _OUTPUT_PER_TOKEN, 4,
+        )
 ```
 
 ```python
@@ -376,9 +406,10 @@ class GeneratedArtifacts(BaseModel):
 ```
 
 This class is the difference between a demo that works and one that explodes on stage.
-An 8B local model *will* hand you a Dockerfile wrapped in ` ```dockerfile ` fences, or a
-manifest missing `kind`. This catches it, triggers one repair attempt, then falls back
-to a template. **Nothing unvalidated reaches the disk.**
+Even a strong hosted model will occasionally hand you a Dockerfile wrapped in
+` ```dockerfile ` fences, or a manifest missing `kind`. This catches it and falls back to
+a template. **Nothing unvalidated reaches the disk.** See `06-phase-2-generation.md` for
+how the Smith uses this.
 
 ---
 
@@ -389,7 +420,7 @@ to a template. **Nothing unvalidated reaches the disk.**
 | Method | Path | Returns |
 |---|---|---|
 | GET | `/health` | `{"status":"ok","version":"0.1.0"}` |
-| GET | `/api/doctor` | JSON version of `deploymint doctor` — every prerequisite check |
+| GET | `/api/doctor` | LLM reachability, DB connectivity, mounted-socket/kubeconfig status |
 
 ### Projects
 
@@ -399,12 +430,12 @@ to a template. **Nothing unvalidated reaches the disk.**
 | GET | `/api/projects` | — | `list[ProjectRead]` |
 | GET | `/api/projects/{id}` | — | `ProjectRead` |
 | DELETE | `/api/projects/{id}` | — | 204 (cascades runs) |
-| POST | `/api/projects/{id}/analyze` | — | `RepoAnalysis` — Architect only, fast, no LLM |
+| POST | `/api/projects/{id}/analyze` | — | `RepoAnalysis` — Architect only, fast |
 | GET | `/api/projects/{id}/graph` | — | `{nodes, links}` for the visualizer |
 
-`analyze` is separate from `run` on purpose. It is sub-second, needs no LLM, and gives
-the user immediate feedback that DeployMint *understood their code* before they commit
-to a deploy. It is the best first-impression moment in the product — surface it prominently.
+`analyze` is separate from `run` on purpose. It's sub-second and gives the user immediate
+feedback that DeployMint *understood their code* before they commit to a deploy — the
+best first-impression moment in the product. Surface it prominently in the web UI.
 
 ### Runs
 
@@ -434,7 +465,7 @@ Frame shape:
   "payload": { "line": "Step 3/7 : RUN pip install -r requirements.txt" } }
 ```
 
-### Chat / tmux.ai (Phase 5)
+### Chat / NL router (Phase 5)
 
 | Method | Path | Body | Returns |
 |---|---|---|---|
@@ -448,7 +479,7 @@ Frame shape:
 | GET | `/api/costs/{project_id}` | per-project breakdown |
 | POST | `/api/costs/query` | `{"question": "which service costs the most?"}` → `{"answer","data"}` |
 
-### Web UI (Phase 6)
+### Web UI (Phase 6) — the primary interface
 
 | Path | Renders |
 |---|---|
@@ -468,18 +499,18 @@ Fix these strings now; the UI switches on them.
 | `run.end` | `{status, duration_ms}` | RunManager |
 | `node.enter` | `{node}` | graph wrapper |
 | `node.exit` | `{node, ms}` | graph wrapper |
-| `architect.done` | `{language, framework, file_count, entrypoint}` | Architect |
+| `architect.done` | `{language, framework, file_count, entrypoint, architecture_summary}` | Architect |
 | `smith.thinking` | `{model}` | Smith |
 | `smith.done` | `{generated_by, files: [names]}` | Smith |
-| `warden.finding` | `Finding` | Warden (one per finding) |
+| `warden.finding` | `Finding` (now may include an LLM `explanation`) | Warden (one per finding) |
 | `warden.done` | `{passed, critical, high, medium, low}` | Warden |
 | `redteam.probe` | `{probe_name, result}` | Red Team |
 | `redteam.done` | `{findings_count}` | Red Team |
 | `execution.log` | `{line, stream: "stdout"\|"stderr"}` | Execution (high volume) |
-| `execution.stage` | `{stage: "build"\|"load"\|"apply"\|"rollout"}` | Execution |
+| `execution.stage` | `{stage: "build"\|"apply"\|"rollout"}` | Execution |
 | `execution.done` | `{image_tag, pod_name, status}` | Execution |
 | `oracle.metric` | `{cpu, memory, ts}` | Oracle |
-| `oracle.anomaly` | `{score, reason}` | Oracle |
+| `oracle.anomaly` | `{score, reason, explanation}` | Oracle |
 | `finops.done` | `CostReport` | FinOps |
 | `error` | `{node, message}` | any |
 

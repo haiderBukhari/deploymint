@@ -18,12 +18,14 @@ mypy>=1.11
 build>=1.2
 
 # ---- security scanner ----
-# Runs as a subprocess (architecture decision #9), so it does not need to share
-# this environment. It is listed here only so a dev checkout gets a working
-# Security Warden without a second install step.
+# Runs as a subprocess (architecture decision #10, docs/01-architecture.md §1.4),
+# so it does not need to share this environment. It is listed here only so a dev
+# checkout gets a working Security Warden without a second install step — the
+# real Dockerfile bakes it into the image (docs/02-repo-layout.md §2.3), which
+# is where the end user actually gets it.
 #
 # Expect TWO pip resolver errors on install. Both are stale pins and are verified
-# benign — see docs/00-prerequisites.md §0.7:
+# benign — see docs/00-prerequisites.md §0.6:
 #     checkov requires networkx<2.7          (we run 3.6.1 — Checkov works fine)
 #     checkov requires importlib-metadata<8.0 (we run 8.9.0 — Checkov works fine)
 #
@@ -35,4 +37,3 @@ checkov>=3.2
 
 # ---- optional extras, uncomment as needed ----
 # boto3>=1.34        # live AWS Cost Explorer  (Phase 6 stretch)
-# litellm>=1.44      # non-Ollama model router (stretch)

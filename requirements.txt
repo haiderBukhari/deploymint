@@ -1,8 +1,10 @@
 # DeployMint — runtime dependencies (direct only)
 #
-# This mirrors [project.dependencies] in pyproject.toml. For a dev checkout:
+# This mirrors [project.dependencies] in pyproject.toml (docs/02-repo-layout.md §2.6).
+# These are what the Dockerfile pip-installs INTO the image the end user runs — see
+# docs/01-architecture.md §1.1. For local dev on this package directly:
 #     pip install -r requirements.txt
-# For an editable install of the package itself (preferred):
+# or, editable:
 #     pip install -e ".[dev]"
 #
 # Exact versions of the full resolved tree live in requirements.lock.txt.
@@ -15,8 +17,11 @@ websockets>=12.0
 python-multipart>=0.0.9
 jinja2>=3.1
 
-# ---- data & validation ----
+# ---- database — Postgres, bundled as a compose service. See docs/03-data-model.md ----
 sqlalchemy>=2.0
+psycopg[binary]>=3.1
+
+# ---- data & validation ----
 pydantic>=2.7
 pydantic-settings>=2.3
 pyyaml>=6.0
@@ -31,30 +36,36 @@ tree-sitter>=0.22
 tree-sitter-language-pack>=0.2
 # NOTE: >=3.3 is REQUIRED and is deliberately incompatible with checkov's stale
 # `networkx<2.7` pin. Checkov is verified working on networkx 3.6.1 (it runs as a
-# subprocess, never imported) — see docs/00-prerequisites.md §0.7. If a future
+# subprocess, never imported) — see docs/00-prerequisites.md §0.6. If a future
 # `pip install` downgrades this to 2.6.x, the Architect Agent regresses.
 networkx>=3.3
 
-# ---- execution (Execution Engine) ----
+# ---- execution (Execution Engine) — talks to the HOST's Docker daemon via a
+# mounted socket (Docker-outside-of-Docker), see docs/08-phase-4-execution.md §4.1a ----
 docker>=7.0
 libtmux>=0.37
 
 # ---- agents / llm ----
+# claude-opus-5 is the default and only supported provider. Structured output
+# validation removes the need for a model router — see docs/04-agents-spec.md §4.10
+# and docs/06-phase-2-generation.md.
+anthropic>=0.69
 langgraph>=0.2
 langchain-core>=0.3
-langchain-ollama>=0.2
 
 # ---- observability (Oracle) ----
 scikit-learn>=1.5
 
 # ---- NOT listed here, on purpose ----
 #
-# checkov    - invoked as a SUBPROCESS by the Security Warden, never imported
-#              (architecture decision #9). Its pinned deps would drag the whole
-#              tree backwards. Install separately:  pip install checkov
-#              ...or fully isolated:                pipx install checkov
+# checkov       - invoked as a SUBPROCESS by the Security Warden, never imported
+#                 (architecture decision #10, docs/01-architecture.md §1.4). Its
+#                 pinned deps would drag the whole tree backwards. Install
+#                 separately:  pip install checkov
+#                 ...or fully isolated:  pipx install checkov
 #
-# boto3      - only for the live AWS Cost Explorer path. Optional extra: [aws]
-# litellm    - only for the non-Ollama model router. Optional extra: [router]
-# chromadb   - RAG few-shot is a stretch goal; heavy + conflicting deps
-# prophet    - needs a compiler toolchain; the Oracle uses IsolationForest only
+# boto3         - only for the live AWS Cost Explorer path. Optional extra: [aws]
+# langchain-ollama - Ollama is not part of this architecture. The product is
+#                 online by design; see docs/01-architecture.md §1.1 and §1.9.
+# litellm, chromadb, prophet - not used. See docs/16-decisions-log.md for why
+#                 these were considered and rejected.

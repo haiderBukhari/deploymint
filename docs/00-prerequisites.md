@@ -1,122 +1,105 @@
 # 00 — Prerequisites
 
-## 0.1 Machine audit (run 2026-08-12 on this Mac)
+This doc has two audiences that must not be confused:
+
+- **§0.1 — the end user.** Whoever runs `docker compose up`. Their list is two items.
+- **§0.2 onward — you, building the image.** Everything Checkov/tree-sitter/kind-related
+  that used to be a 10-step end-user setup checklist is now **internal to the Dockerfile**.
+  It happens once, when you build the image, and the end user never sees any of it.
+
+This split is the actual payoff of the Docker Compose decision — read `01-architecture.md`
+§1.1 if you haven't yet.
+
+---
+
+## 0.1 End-user prerequisites (the whole list)
+
+| Requirement | Why |
+|---|---|
+| Docker Desktop (or Docker Engine + Compose plugin) | runs the app, builds images via the mounted socket, runs Postgres |
+| A directory to point at their code | mapped in `.env` as `DEPLOYMINT_PROJECTS_DIR` |
+
+That's it. No Python, no Postgres install, no Checkov, no `kind`, no Ollama, no API key
+management beyond pasting one value into `.env`.
+
+```bash
+git clone <this-repo> deploymint && cd deploymint
+cp .env.example .env
+# edit .env: set ANTHROPIC_API_KEY and DEPLOYMINT_PROJECTS_DIR
+docker compose up -d
+```
+
+Open `http://localhost:8000`.
+
+**One optional item:** if the user wants real Kubernetes deploys rather than plain
+`docker run`, they need a reachable cluster and a `~/.kube/config` — `kind`,
+Docker Desktop's built-in Kubernetes, or a real cloud cluster all work. This is optional;
+see `01-architecture.md` §1.4 decision 12 for the fallback behavior.
+
+---
+
+## 0.2 Machine audit — the build machine (yours, not the end user's)
+
+Everything below this line describes **your** development machine while you write the
+Dockerfile and the app. Verified on this Mac, 2026-08-12:
 
 | Requirement | Found | Verdict | Action |
 |---|---|---|---|
-| Python 3.11 venv at `./venv` | `venv/bin/python3.11` | ✅ **use it** | none |
+| Python 3.11 venv at `./venv` | `venv/bin/python3.11` | ✅ **use it for local dev** | none |
 | System `python3` | **3.15.0a6** | ⚠️ **never use** | alpha; `checkov`, `tree-sitter`, `chromadb` have no wheels |
 | Docker daemon | 29.2.0 (linux VM) | ✅ | none |
-| `kubectl` | `/usr/local/bin/kubectl` | ✅ | none |
-| Local K8s cluster | **none** | ❌ | install `kind` (§0.3) |
-| Ollama | `/opt/homebrew/bin/ollama` | ✅ | none |
-| `llama3.1:8b` | pulled (4.9 GB) | ✅ | none |
-| `nomic-embed-text` | pulled (274 MB) | ✅ | used later for RAG |
-| `tmux` | **not found** | ❌ | `brew install tmux` (§0.3) |
+| `kubectl` | `/usr/local/bin/kubectl` | ✅ | none — dev-time only, for testing the deploy path |
+| Local K8s cluster (`kind`) | none initially | needed for dev | `kind create cluster --name deploymint` |
+| `tmux` | not found initially | needed for dev | `brew install tmux` |
 | `git` | `/usr/bin/git` | ✅ | none |
-| Repo is a git repo | **no** | ⚠️ | `git init` recommended (§0.5) |
+| OPA | not found initially | needed for dev | `brew install opa` |
 
-### ⚠️ The single most important line in this document
+**None of this matters to the end user.** It matters because the Dockerfile you write
+needs to install the same things *inside the image* — Python 3.11, Checkov, OPA, tree-
+sitter grammars, `kubectl` — and you want to develop against the same versions you'll
+bake in, so surprises show up on your machine, not in the built image.
 
-Your shell's `python3` is **Python 3.15.0a6**, a pre-release. Half of DeployMint's
-dependency tree ships no wheels for it and will attempt (and fail) source builds.
+### The single most important line, still true inside the image
 
-**Always activate the venv first. Every command in every doc assumes it is active.**
-
-```bash
-source /Users/haiderbukhari/Public/DeployMint/venv/bin/activate
-```
-
-Verify — this must print `3.11.x`:
-
-```bash
-python -V
-```
+The image's base is `python:3.11-slim` (or similar), never a `latest` tag that could
+silently move to a newer, wheel-incompatible Python. Pin it explicitly in the Dockerfile.
 
 ---
 
-## 0.2 Why each tool is needed
+## 0.3 What goes in the Dockerfile — and why each piece is there
 
-| Tool | Used by | Fails how if missing |
+| Tool | Baked in because | Fails how if missing from the image |
 |---|---|---|
 | Python 3.11 | everything | dependency resolution errors, C-extension build failures |
-| Docker | Execution Engine — builds images from generated Dockerfile | `docker.errors.DockerException` on server start |
-| kind (or Docker Desktop K8s) | Execution Engine — `kubectl apply` target | deploy step has nowhere to go; demo stops at "image built" |
-| kubectl | Execution Engine | cannot apply manifests |
-| Ollama | LLM layer — default model backend | Artifact Smith silently falls back to templates (still works, but no AI story) |
-| tmux | Execution Engine — recorded sessions | the *auditability* pillar of the pitch disappears |
-| git | Architect Agent — ignores `.git`, reads repo metadata | minor; degrades gracefully |
-| OPA (`opa` binary) | Security Warden — Rego policy evaluation | Rego rules skipped; Checkov still runs |
-| Node.js (optional) | only if you build a React UI instead of server-rendered | n/a for MVP |
+| `tree-sitter-language-pack` | Architect Agent's AST parsing | import extraction breaks silently |
+| `checkov` | Security Warden | scan step fails; the app must fail closed (see `07-phase-3-security.md`) |
+| `opa` binary | Security Warden's Rego rules | Rego checks skipped; same fail-closed rule applies |
+| `kubectl` binary | Execution Engine | cannot apply manifests to a mounted kubeconfig |
+| `docker` CLI (client only — talks to the mounted socket) | Execution Engine | cannot build images |
+| `tmux` | Execution Engine's recorded sessions | the auditability pillar of the pitch disappears |
+| `git` | Architect Agent metadata reads | minor; degrades gracefully |
+
+Build this once, verify it, and it never needs to be re-verified by an end user again —
+that verification work has been done for them by virtue of being in the image.
 
 ---
 
-## 0.3 Install the missing pieces
-
-Run these **once**. They are outside the venv (system tools).
-
-```bash
-brew install tmux kind opa
-```
-
-Then create the cluster DeployMint will deploy into:
-
-```bash
-kind create cluster --name deploymint
-```
-
-Verify the cluster is live and `kubectl` points at it:
-
-```bash
-kubectl cluster-info --context kind-deploymint
-```
-
-Expected output contains `Kubernetes control plane is running at https://127.0.0.1:<port>`.
-
-### Alternative to kind: Docker Desktop Kubernetes
-
-If you prefer not to install `kind`: open Docker Desktop → Settings → Kubernetes →
-**Enable Kubernetes** → Apply & Restart. Then your context is `docker-desktop` instead
-of `kind-deploymint`. Set it in config later:
-
-```bash
-kubectl config use-context docker-desktop
-```
-
-**Recommendation: use `kind`.** It is disposable (`kind delete cluster --name deploymint`
-resets everything in seconds), which matters a lot when you are debugging a deploy loop
-at 2am on Day 9.
-
-### One kind-specific gotcha you must know now
-
-`kind` runs its own containerd, **separate from your Docker daemon**. An image you build
-with `docker build` is *not* visible to the cluster. You must load it:
-
-```bash
-kind load docker-image deploymint/myapp:latest --name deploymint
-```
-
-This single command is the #1 cause of `ErrImagePull` in local K8s demos. The Execution
-Engine handles it automatically (see `08-phase-4-execution.md` §8.5), but know why it's there.
-
----
-
-## 0.4 Install Python dependencies
+## 0.4 Local dev environment (for building the app itself)
 
 ```bash
 source /Users/haiderbukhari/Public/DeployMint/venv/bin/activate
 python -m pip install --upgrade pip setuptools wheel
 ```
 
-Full dependency set, grouped by what it serves. Install in this order — Checkov drags in
-a large tree and is the most likely to conflict, so surface that early:
+Install in this order — Checkov drags in a large tree and is the most likely to
+conflict, so surface that early, exactly as it will inside the image build:
 
 ```bash
 pip install "checkov>=3.2.0"
 ```
 
 ```bash
-pip install "fastapi>=0.111" "uvicorn[standard]>=0.30" "sqlalchemy>=2.0" "pydantic>=2.7" "pydantic-settings>=2.3" "python-multipart>=0.0.9" "jinja2>=3.1"
+pip install "fastapi>=0.111" "uvicorn[standard]>=0.30" "sqlalchemy>=2.0" "psycopg[binary]>=3.1" "pydantic>=2.7" "pydantic-settings>=2.3" "python-multipart>=0.0.9" "jinja2>=3.1"
 ```
 
 ```bash
@@ -132,7 +115,7 @@ pip install "docker>=7.0" "libtmux>=0.37"
 ```
 
 ```bash
-pip install "langgraph>=0.2" "langchain-core>=0.3" "langchain-ollama>=0.2" "litellm>=1.44"
+pip install "langgraph>=0.2" "langchain-core>=0.3" "anthropic>=0.69"
 ```
 
 ```bash
@@ -147,25 +130,27 @@ pip install "pytest>=8.0" "pytest-asyncio>=0.23" "ruff>=0.5" "mypy>=1.11"
 
 ### Notes on specific packages
 
-- **`tree-sitter-language-pack`** — do *not* install `tree-sitter-python` etc. individually
-  and do *not* try to compile grammars yourself. The language pack ships prebuilt binaries
-  for ~100 languages behind one API. This saves you a full day.
+- **`tree-sitter-language-pack`** — do *not* install `tree-sitter-python` etc.
+  individually and do *not* compile grammars yourself. Prebuilt binaries for ~100
+  languages, one API. Saves a full day, in dev and in the image build alike.
 - **`checkov`** pins older versions of some libs and **will** print resolver errors.
-  Install it **first** (as above) and let the rest resolve around it. Two conflicts are
-  expected and have been **verified benign** — see §0.7.
-- **`chromadb`** is deliberately **not** in this list. RAG few-shot is a stretch goal;
-  chromadb is heavy and pulls conflicting deps. Add it only in Phase 8.
-- **`prophet`** is deliberately **not** in this list. It needs a compiler toolchain and
-  takes ~10 minutes to install. The Observability Oracle uses `IsolationForest` from
-  scikit-learn only. Prophet is a stretch goal.
+  Install it **first** and let the rest resolve around it. Two conflicts are expected and
+  have been **verified benign** — see §0.6.
+- **`psycopg[binary]`** — the Postgres driver. `[binary]` avoids needing build tools for
+  `libpq` inside the image; use the pure-C extension build only if you have a specific
+  reason to.
+- **`langchain-ollama`, `litellm`, `chromadb`, `prophet`** are **not** in this list.
+  Ollama is gone as a fallback provider — the product is online by design (see
+  `01-architecture.md` §1.9). A model router and RAG few-shot remain stretch goals; add
+  them only if they earn their place later.
 
-### The three requirements files (created 2026-08-12)
+### The three requirements files
 
 | File | Contents | Use |
 |---|---|---|
-| `requirements.txt` | direct runtime deps only, lower bounds | mirrors `[project.dependencies]`; edit this by hand |
-| `requirements-dev.txt` | `-r requirements.txt` + pytest, ruff, mypy, build, checkov | dev checkout |
-| `requirements.lock.txt` | all 165 packages, exact `==` pins | reproduce this exact environment |
+| `requirements.txt` | direct runtime deps only, lower bounds | mirrors `[project.dependencies]`; this is also what `pip install` runs **inside the Dockerfile** |
+| `requirements-dev.txt` | `-r requirements.txt` + pytest, ruff, mypy, checkov | local dev checkout only — not copied into the image |
+| `requirements.lock.txt` | all packages, exact `==` pins | reproduce this exact environment, and pin the same versions in the Dockerfile's `pip install -r` step |
 
 ```bash
 pip install -r requirements-dev.txt
@@ -200,14 +185,11 @@ print(bad or 'all satisfied')"
 
 ## 0.5 Initialize git
 
-The working directory is not a git repo yet. Do this before writing code — you want
-checkpoints available from the first commit.
-
 ```bash
 cd /Users/haiderbukhari/Public/DeployMint && git init && git branch -M main
 ```
 
-Create `.gitignore` at the repo root:
+`.gitignore`:
 
 ```
 venv/
@@ -219,46 +201,20 @@ __pycache__/
 *.egg-info/
 dist/
 build/
-.deploymint/
-*.db
-*.sqlite3
 .env
+projects/*/.deploymint/
 .DS_Store
 ```
 
-`.deploymint/` is the runtime home directory (DB, logs, artifacts). It must never be
-committed — it contains user repo paths and possibly cloud cost data.
+`.env` holds the Anthropic key — never commit it. `projects/*/.deploymint/` is generated
+run output living alongside the user's own code — also never committed. Ship `.env.example`
+with placeholder values so a fresh checkout has an obvious template to copy.
 
 ---
 
-## 0.6 The `deploymint doctor` command (build this in Phase 1)
+## 0.6 The Checkov resolver conflicts — expected, verified benign
 
-This is not optional polish. It is how every future user (and you, on Day 9, at 2am)
-finds out *which* prerequisite broke. Spec:
-
-| Check | Method | Failure message must say |
-|---|---|---|
-| Python version | `sys.version_info >= (3, 11)` and `< (3, 14)` | which version you're on, and to activate the venv |
-| Docker daemon | `docker.from_env().ping()` | "Docker daemon unreachable — is Docker Desktop running?" |
-| kubectl binary | `shutil.which("kubectl")` | install hint |
-| K8s cluster reachable | `kubectl cluster-info --request-timeout=3s` | "No cluster. Run: `kind create cluster --name deploymint`" |
-| kind binary | `shutil.which("kind")` | only a warning if the context isn't a kind context |
-| Ollama reachable | `GET {OLLAMA_BASE_URL}/api/tags` | "Ollama not running. Run: `ollama serve`" |
-| Default model pulled | model name present in `/api/tags` response | "Run: `ollama pull llama3.1:8b`" |
-| tmux binary | `shutil.which("tmux")` | "brew install tmux — execution recording disabled without it" |
-| OPA binary | `shutil.which("opa")` | warning only; Rego checks skipped |
-| Home dir writable | `os.access(DEPLOYMINT_HOME, os.W_OK)` | path + permissions |
-| networkx not downgraded | `networkx.__version__ >= "3.3"` | "checkov's stale pin downgraded networkx — run `pip install 'networkx>=3.3'`" (see §0.7) |
-
-Output format: a Rich table, one row per check, `✓` green / `!` yellow / `✗` red.
-Exit code `0` if no red, `1` if any red. **Warnings (yellow) never fail the exit code** —
-tmux and OPA degrade gracefully.
-
----
-
-## 0.7 The Checkov resolver conflicts (expected — verified benign)
-
-`pip` will print this, twice, during the install:
+`pip` will print this, twice, both locally and inside the image build:
 
 ```
 ERROR: pip's dependency resolver does not currently take into account all the
@@ -277,59 +233,33 @@ checkov 3.3.10 requires importlib-metadata<8.0.0, but you have importlib-metadat
 
 The Kubernetes run included graph-based `CKV2_*` checks — those are precisely the ones
 that exercise networkx — and every check ID in the severity map of `04-agents-spec.md`
-§4.3 fired correctly (`CKV_K8S_10/11/12/13/20/23/28/37`, `CKV_DOCKER_*`). Checkov also
-discovered all 550+ checks on `importlib-metadata` 8.9.0, so its entry-point loading is
-unaffected.
+§4.3 fired correctly. Checkov also discovered all 550+ checks on `importlib-metadata`
+8.9.0, so its entry-point loading is unaffected.
 
 You need `networkx>=3.3` for the Architect Agent; Checkov's `<2.7` pin would drag you
-back to a 2021 release. **Keep 3.6.1.**
+back to a 2021 release. **Keep 3.6.1**, and pin it explicitly in `requirements.txt` so a
+future `pip install` inside the image build can't silently satisfy Checkov's pin instead.
 
-### Protect this state
-
-The risk is not the warning — it is a **future `pip install` silently downgrading
-networkx back to 2.6.3** to satisfy the pin, which would regress the Architect Agent.
-Two defenses:
-
-```bash
-pip freeze > requirements.lock.txt
-```
-
-Then, after any future install that touches these packages, confirm nothing moved:
-
-```bash
-python -c "import networkx; assert networkx.__version__ >= '3.3', f'DOWNGRADED to {networkx.__version__}'; print('networkx ok:', networkx.__version__)"
-```
-
-Add that assertion to `deploymint doctor` (§0.6) as a check named *"networkx not
-downgraded by checkov"*. It costs one line and catches a regression that would otherwise
-show up as a confusing graph bug on Day 8.
-
-### If Checkov ever does break
-
-Because of decision #9 (`01-architecture.md`), the Security Warden invokes Checkov as a
-**subprocess**, never as an import. So Checkov does not have to live in this venv at all:
-
-```bash
-pipx install checkov
-```
-
-The Warden calls the `checkov` binary on `PATH` and parses stdout either way — nothing in
-the code changes. That is the escape hatch, and it is why the subprocess design was chosen
-up front rather than as a workaround.
+If Checkov ever does genuinely conflict with something else in the app's dependency tree,
+the escape hatch is to install it into an isolated location inside the image (`pipx` or a
+separate venv layer) and invoke the `checkov` binary as a subprocess either way — nothing
+in the app code changes, because Security Warden already calls it as a subprocess by
+design (`01-architecture.md` decision 10).
 
 ---
 
-## 0.8 Acceptance test for Phase 0
+## 0.7 Dev-only acceptance test
 
-Every one of these must succeed before you write application code:
+Run this on your own machine before writing the Dockerfile, so you know the app works
+before you containerize it:
 
 ```bash
-source venv/bin/activate && python -V && python -c "import fastapi, sqlalchemy, langgraph, networkx, docker, libtmux, tree_sitter; print('imports ok')"
+source venv/bin/activate && python -V && python -c "import fastapi, sqlalchemy, psycopg, langgraph, networkx, docker, libtmux, tree_sitter, anthropic; print('imports ok')"
 ```
 
 ```bash
-docker ps >/dev/null && kubectl get nodes && curl -s localhost:11434/api/tags | head -c 200 && which tmux opa
+docker ps >/dev/null && kubectl get nodes && which tmux opa && python -c "import os,sys; sys.exit(0 if os.getenv('ANTHROPIC_API_KEY') else print('set ANTHROPIC_API_KEY in your shell for local dev'))"
 ```
 
-When both commands run clean, tick `Phase 0` in `README.md` and go to
-`01-architecture.md`.
+The real acceptance test — `docker compose up -d` on a machine with nothing but Docker —
+comes in `11-phase-7-polish-demo.md` once the image exists.

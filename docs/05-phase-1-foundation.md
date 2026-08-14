@@ -1,11 +1,18 @@
 # 05 — Phase 1: Foundation (Days 1–2)
 
-**Goal:** `deploymint server` boots, `deploymint doctor` is all green, and you can
-register a project and get back a real dependency graph — with **no LLM involved**.
+**Goal:** the app boots (via `uvicorn` locally, or `docker compose up -d` once the
+Dockerfile exists), `/api/doctor` reports green, and you can register a project and get
+back a real dependency graph — with **no LLM involved yet**.
 
 **Why no LLM yet:** if the first thing you build depends on a model, you cannot tell
 whether a failure is your code or the model. Phase 1 is 100% deterministic. Everything
 you build here you can trust for the next 13 days.
+
+**Where this runs:** everything in this phase is normal Python you develop and test in
+your local venv (`00-prerequisites.md` §0.4). The Dockerfile that packages it into the
+image the end user actually runs comes together across every phase and is finalized in
+`11-phase-7-polish-demo.md` — you do not need Docker running to do most of Phase 1 work,
+only Postgres (which you can run as a bare container for dev — see the checkpoint below).
 
 ---
 
@@ -19,11 +26,15 @@ cd /Users/haiderbukhari/Public/DeployMint && source venv/bin/activate
 mkdir -p deploymint/{db,schemas,core,agents,api,runner,policies,data,web/templates/partials,web/static/vendor} tests/fixtures scripts && for d in deploymint deploymint/db deploymint/schemas deploymint/core deploymint/agents deploymint/api deploymint/runner tests; do touch $d/__init__.py; done
 ```
 
-Write `pyproject.toml` (full content in `02-repo-layout.md` §2.2), then:
+Write `pyproject.toml` (full content in `02-repo-layout.md` §2.6), then:
 
 ```bash
 pip install -e ".[dev]"
 ```
+
+This installs the app package into your venv **for local development**. It is not how
+the end user gets DeployMint — they get the built Docker image (`02-repo-layout.md`
+§2.3). This command exists so you can run and test the code directly while writing it.
 
 Set the version in `deploymint/__init__.py`:
 
@@ -47,22 +58,28 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="DEPLOYMINT_", extra="ignore")
 
-    home: Path = Path.home() / ".deploymint"
-
     # server
-    host: str = "127.0.0.1"
+    host: str = "0.0.0.0"       # fine inside a container; compose publishes 127.0.0.1 only
     port: int = 8000
     sql_echo: bool = False
 
-    # llm
-    ollama_base_url: str = "http://localhost:11434"
-    model: str = "llama3.1:8b"
-    llm_timeout: int = 180
-    llm_temperature: float = 0.1
+    # database — injected by docker-compose.yml as DATABASE_URL (no DEPLOYMINT_ prefix,
+    # it's a convention shared with other tools). Falls back to a local dev default.
+    database_url_env: str = "postgresql+psycopg://deploymint:deploymint@localhost:5432/deploymint"
 
-    # kubernetes
-    kube_context: str = "kind-deploymint"
-    kind_cluster: str = "deploymint"
+    # llm — see 04-agents-spec.md §4.10 and core/llm.py
+    anthropic_api_key: str = ""     # required; read from env, never hardcoded
+    model: str = "claude-opus-5"
+    llm_timeout: int = 120
+
+    # the sandbox root — see 01-architecture.md §1.7. Inside the container this is
+    # always /workspace (the bind-mounted projects directory). Tests override it to
+    # a tmp directory.
+    workspace_root: Path = Path("/workspace")
+
+    # kubernetes — optional; if the mounted kubeconfig has no reachable cluster,
+    # the Execution Engine falls back to `docker run` (01-architecture.md decision 12)
+    kube_context: str = ""
     rollout_timeout: int = 120
 
     # security
@@ -75,44 +92,47 @@ class Settings(BaseSettings):
 
     @property
     def database_url(self) -> str:
-        return f"sqlite:///{self.home / 'deploymint.db'}"
-
-    @property
-    def artifacts_dir(self) -> Path:
-        return self.home / "artifacts"
-
-    @property
-    def sessions_dir(self) -> Path:
-        return self.home / "sessions"
-
-    def ensure_dirs(self) -> None:
-        for d in (self.home, self.artifacts_dir, self.sessions_dir):
-            d.mkdir(parents=True, exist_ok=True)
+        import os
+        return os.environ.get("DATABASE_URL", self.database_url_env)
 
 
 @lru_cache
 def get_settings() -> Settings:
-    s = Settings()
-    s.ensure_dirs()
-    return s
+    return Settings()
 ```
 
-`@lru_cache` + a getter, **not** a module-level `settings = Settings()`. Tests need to
-override `DEPLOYMINT_HOME` and call `get_settings.cache_clear()`. Import-time
-instantiation makes that impossible and every test writes to your real database.
+Three real changes from a local-first design, all load-bearing:
+
+1. **No `~/.deploymint` home directory.** There is nothing left that needs one —
+   Postgres owns its own state (a named volume Compose manages), and generated artifacts
+   live next to the project that generated them, under `workspace_root`. See
+   `01-architecture.md` §1.8.
+2. **`database_url` reads the plain `DATABASE_URL` env var first**, because that's the
+   convention `docker-compose.yml` uses (`02-repo-layout.md` §2.4) and matches how most
+   tools expect a Postgres connection string to be injected. The `DEPLOYMINT_` prefix
+   still applies to everything else.
+3. **`workspace_root` is configurable, not hardcoded to `/workspace`.** Inside the
+   container it always is `/workspace` — but tests need to point it at a tmp directory,
+   and pydantic-settings makes that a one-line env var override rather than a
+   conditional in application code.
+
+`@lru_cache` + a getter, **not** a module-level `settings = Settings()`. Tests override
+`DEPLOYMINT_WORKSPACE_ROOT` and `DATABASE_URL`, then call `get_settings.cache_clear()`.
+Import-time instantiation makes that impossible.
 
 ---
 
 ## Step 1.3 — Sandbox (security critical — write the tests first)
 
+The sandbox boundary changed from "anywhere except a short list of forbidden system
+paths" to "**only** under the mounted workspace root" — a strictly narrower, safer rule,
+because there is now exactly one legitimate root instead of an open-ended filesystem.
+See `01-architecture.md` §1.7.
+
 ```python
 # deploymint/core/sandbox.py
 from pathlib import Path
-
-FORBIDDEN_ROOTS = {
-    Path("/"), Path("/etc"), Path("/usr"), Path("/bin"), Path("/sbin"),
-    Path("/var"), Path("/System"), Path("/Library"), Path.home(),
-}
+from deploymint.config import get_settings
 
 
 class SandboxError(ValueError):
@@ -120,10 +140,12 @@ class SandboxError(ValueError):
 
 
 def validate_repo_path(raw: str) -> Path:
-    """Resolve and validate a user-supplied repository path."""
+    """Resolve and validate a user-supplied path. Must live under workspace_root —
+    there is no other directory the app has any legitimate reason to touch."""
     if not raw or not raw.strip():
         raise SandboxError("repo_path is empty")
 
+    root = get_settings().workspace_root.resolve()
     p = Path(raw).expanduser()
     try:
         p = p.resolve(strict=True)
@@ -132,10 +154,8 @@ def validate_repo_path(raw: str) -> Path:
 
     if not p.is_dir():
         raise SandboxError(f"not a directory: {p}")
-    if p in FORBIDDEN_ROOTS:
-        raise SandboxError(f"refusing to operate on system directory: {p}")
-    if len(p.parts) < 3:
-        raise SandboxError(f"path is too close to the filesystem root: {p}")
+    if not p.is_relative_to(root):
+        raise SandboxError(f"path must be under {root}: {p}")
     return p
 
 
@@ -152,34 +172,56 @@ def safe_join(root: Path, relative: str) -> Path:
 # tests/test_sandbox.py
 import pytest
 from deploymint.core.sandbox import validate_repo_path, safe_join, SandboxError
+from deploymint.config import get_settings
 
 
-def test_rejects_root():
+@pytest.fixture(autouse=True)
+def workspace(tmp_path, monkeypatch):
+    monkeypatch.setenv("DEPLOYMINT_WORKSPACE_ROOT", str(tmp_path))
+    get_settings.cache_clear()
+    yield tmp_path
+    get_settings.cache_clear()
+
+
+def test_rejects_outside_workspace():
     with pytest.raises(SandboxError):
-        validate_repo_path("/")
+        validate_repo_path("/etc")
 
 
-def test_rejects_missing():
+def test_rejects_missing(workspace):
     with pytest.raises(SandboxError):
-        validate_repo_path("/nope/does/not/exist")
+        validate_repo_path(str(workspace / "does-not-exist"))
 
 
-def test_rejects_traversal(tmp_path):
+def test_rejects_traversal(workspace):
     with pytest.raises(SandboxError):
-        safe_join(tmp_path, "../../etc/passwd")
+        safe_join(workspace, "../../etc/passwd")
 
 
-def test_accepts_real_dir(tmp_path):
-    (tmp_path / "a" / "b").mkdir(parents=True)
-    assert validate_repo_path(str(tmp_path / "a" / "b")).is_dir()
+def test_accepts_dir_under_workspace(workspace):
+    (workspace / "my-app").mkdir()
+    assert validate_repo_path(str(workspace / "my-app")).is_dir()
 ```
+
+This is simpler than the original `FORBIDDEN_ROOTS` denylist — a single allowlist rule
+(`is_relative_to(workspace_root)`) covers every case the old list of forbidden system
+directories was trying to approximate, and it's impossible to bypass by finding a system
+path the denylist forgot.
 
 ---
 
-## Step 1.4 — Database
+## Step 1.4 — Database (Postgres)
 
 Write `deploymint/db/models.py` and `deploymint/db/database.py` verbatim from
 `03-data-model.md` §3.2.
+
+For local dev, run a bare Postgres container (this is *not* the compose stack — just a
+throwaway instance so you can develop against the real thing before the Dockerfile
+exists):
+
+```bash
+docker run -d --name deploymint-dev-db -e POSTGRES_USER=deploymint -e POSTGRES_PASSWORD=deploymint -e POSTGRES_DB=deploymint -p 5432:5432 postgres:16-alpine
+```
 
 **Checkpoint:**
 
@@ -192,6 +234,10 @@ Must print `['audit_logs', 'events', 'projects', 'runs']`.
 ---
 
 ## Step 1.5 — Event bus
+
+Unchanged from a single-container design — one process, one in-memory queue per run is
+correct and sufficient. See `01-architecture.md` §1.6 for why a Postgres pub/sub layer
+would be unnecessary complexity here.
 
 ```python
 # deploymint/core/events.py
@@ -261,8 +307,8 @@ registry = BusRegistry()
 
 The `QueueFull` drop is deliberate. A `docker build` emits log lines faster than a
 browser consumes them. Blocking the agent to keep the UI in sync would make builds
-crawl. Events are also persisted to the DB, so nothing is truly lost — a refresh replays
-the complete timeline.
+crawl. Events are also persisted to Postgres, so nothing is truly lost — a refresh
+replays the complete timeline.
 
 ---
 
@@ -274,7 +320,7 @@ Add at the top of the file:
 
 ```python
 # ⚠️  FROZEN SCHEMA — Phase 1.
-# Changing a key here means touching every agent, the DB JSON columns, and the UI.
+# Changing a key here means touching every agent, the DB JSONB columns, and the UI.
 # If you think you need a new key, add it to an existing sub-TypedDict instead.
 ```
 
@@ -283,7 +329,9 @@ Add at the top of the file:
 ## Step 1.7 — Architect Agent
 
 Implement `deploymint/core/repo_scanner.py`, `deploymint/core/graph_builder.py`, and
-`deploymint/agents/architect.py` per `04-agents-spec.md` §4.1.
+`deploymint/agents/architect.py` per `04-agents-spec.md` §4.1. The LLM summary in §4.1b
+is a Phase 2+ addition once `core/llm.py` exists — skip it for now and leave
+`architecture_summary` unset.
 
 Build it in this order and test after each — do not write all three then debug:
 
@@ -368,6 +416,10 @@ non-trivial ranking, so your graph visualization has something to show.
 manifest's liveness probe points there. Without it, your pods fail readiness and the
 demo dies at the last step.
 
+Tests point `workspace_root` at `tests/fixtures/` itself (via the `workspace` fixture in
+§1.3), so `sample_fastapi` behaves exactly like a project the end user placed under
+their own `./projects` directory — the sandbox rule is exercised for real, not mocked.
+
 ---
 
 ## Step 1.9 — API: health, doctor, projects
@@ -387,13 +439,19 @@ def health():
 
 
 @router.get("/api/doctor")
-def doctor():
-    checks = run_checks()
+async def doctor():
+    checks = await run_checks()
     return {"checks": checks, "ok": all(c["status"] != "fail" for c in checks)}
 ```
 
-`deploymint/core/doctor.py` implements the check table from `00-prerequisites.md` §0.6.
-Each check returns `{"name","status":"pass|warn|fail","detail","fix"}`.
+`deploymint/core/doctor.py` checks: Postgres reachable, `ANTHROPIC_API_KEY` present and
+the API reachable (a cheap call, not a full completion), `/var/run/docker.sock` present
+and responsive, `~/.kube/config` mount present (warn-only — the Execution Engine
+degrades gracefully without it). Each check returns
+`{"name","status":"pass|warn|fail","detail","fix"}`. This is the containerized
+equivalent of the original `deploymint doctor` CLI command — now it's an endpoint the web
+UI's own dashboard header can poll, since there's no separate CLI process to run it from
+inside the container.
 
 ```python
 # deploymint/api/projects.py
@@ -461,14 +519,12 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from deploymint import __version__
-from deploymint.config import get_settings
 from deploymint.db.database import init_db
 from deploymint.api import health, projects
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    get_settings().ensure_dirs()
     init_db()
     yield
     # shutdown: cancel in-flight runs here (Phase 5)
@@ -485,74 +541,29 @@ app = create_app()
 ```
 
 Use a **factory**. Tests build isolated apps; `--reload` needs the import string. Both
-work with this shape.
+work with this shape. **This module string, `deploymint.server:app`, is exactly what the
+Dockerfile's `CMD` runs** (`02-repo-layout.md` §2.3) — there is no separate CLI subcommand
+that wraps it; `uvicorn` is invoked directly, both in local dev and inside the container.
 
 ---
 
-## Step 1.11 — CLI
+## Step 1.11 — There is no `deploymint server` CLI command in this phase
 
-```python
-# deploymint/cli.py
-import click
-import uvicorn
-from rich.console import Console
-from rich.table import Table
+This is a deliberate omission, not something skipped. In the original local-first design,
+a `deploymint` CLI both started the server *and* acted as a client — because it was the
+same process the end user installed with `pip`. In this architecture, the server is
+started by the Dockerfile's `CMD` (or, for local dev, directly via `uvicorn`):
 
-from deploymint import __version__
-from deploymint.config import get_settings
-
-console = Console()
-
-
-@click.group()
-@click.version_option(__version__)
-def main():
-    """DeployMint — local-first AI DevOps platform."""
-
-
-@main.command()
-@click.option("--host", default=None)
-@click.option("--port", default=None, type=int)
-@click.option("--reload", is_flag=True)
-def server(host, port, reload):
-    """Start the DeployMint server."""
-    s = get_settings()
-    host, port = host or s.host, port or s.port
-    if host not in ("127.0.0.1", "localhost"):
-        console.print(
-            f"[bold red]WARNING[/] binding to {host} exposes shell execution to your "
-            "network. Only do this on a trusted network."
-        )
-    console.print(f"[bold green]DeployMint[/] → [cyan]http://{host}:{port}[/]")
-    console.print(f"  home:  {s.home}")
-    console.print(f"  model: {s.model}\n")
-    uvicorn.run("deploymint.server:app", host=host, port=port, reload=reload)
-
-
-@main.command()
-def doctor():
-    """Check that every prerequisite is available."""
-    from deploymint.core.doctor import run_checks
-
-    checks = run_checks()
-    table = Table(title="DeployMint Doctor", show_lines=False)
-    table.add_column("", width=2)
-    table.add_column("Check", style="bold")
-    table.add_column("Detail")
-
-    icon = {"pass": "[green]✓[/]", "warn": "[yellow]![/]", "fail": "[red]✗[/]"}
-    for c in checks:
-        table.add_row(icon[c["status"]], c["name"], c["detail"])
-
-    console.print(table)
-    fails = [c for c in checks if c["status"] == "fail"]
-    if fails:
-        console.print("\n[bold red]Fix these:[/]")
-        for c in fails:
-            console.print(f"  • {c['name']}: [cyan]{c['fix']}[/]")
-        raise SystemExit(1)
-    console.print("\n[bold green]All required checks passed.[/]")
+```bash
+# local dev — equivalent to what the Dockerfile's CMD does
+uvicorn deploymint.server:app --reload --host 0.0.0.0 --port 8000
 ```
+
+Add this as `make dev` in the Makefile (`02-repo-layout.md` §2.7). The `deploymint` CLI
+that ships later, in `09-phase-5-orchestration.md`, is a **pure client** — it never
+imports `agents/`, never touches the database, and has no reason to exist until there's a
+running server for it to talk to. Building it now would be building a second thing that
+does the same job the Dockerfile already does.
 
 ---
 
@@ -561,11 +572,11 @@ def doctor():
 Terminal A:
 
 ```bash
-source venv/bin/activate && deploymint doctor
+docker run -d --name deploymint-dev-db -e POSTGRES_USER=deploymint -e POSTGRES_PASSWORD=deploymint -e POSTGRES_DB=deploymint -p 5432:5432 postgres:16-alpine
 ```
 
 ```bash
-deploymint server
+source venv/bin/activate && DEPLOYMINT_WORKSPACE_ROOT=$(pwd)/tests/fixtures ANTHROPIC_API_KEY=sk-ant-placeholder uvicorn deploymint.server:app --reload
 ```
 
 Terminal B:
@@ -575,7 +586,11 @@ curl -s localhost:8000/health
 ```
 
 ```bash
-curl -s -X POST localhost:8000/api/projects -H 'content-type: application/json' -d '{"name":"sample-api","repo_path":"./tests/fixtures/sample_fastapi"}'
+curl -s localhost:8000/api/doctor | python -m json.tool
+```
+
+```bash
+curl -s -X POST localhost:8000/api/projects -H 'content-type: application/json' -d "{\"name\":\"sample-api\",\"repo_path\":\"$(pwd)/tests/fixtures/sample_fastapi\"}"
 ```
 
 ```bash
@@ -584,13 +599,15 @@ curl -s -X POST localhost:8000/api/projects/1/analyze | python -m json.tool
 
 **Pass criteria — all of these:**
 
-- `doctor` exits 0
-- `POST /api/projects` returns 201 with a resolved absolute `repo_path`
+- `/api/doctor` reports `database: pass` (Postgres reachable)
+- `POST /api/projects` returns 201 with a resolved absolute `repo_path` **under the
+  configured workspace root** — and returns 400 for anything outside it, including
+  something that would have been allowed by the old denylist (e.g. `/tmp`)
 - `analyze` returns `language: "python"`, `framework: "fastapi"`,
   `entrypoint: "main.py"`, `exposed_port: 8000`
 - `dependency_graph.nodes` has ≥ 4 entries and `links` has ≥ 3
 - `critical_files[0]` is `app/db.py` (the most-imported module)
-- Registering `/` returns HTTP 400
+- Registering a path outside the workspace root returns HTTP 400
 - `pytest -m "not slow"` is green
 
 Tick **Phase 1** in `README.md`. Next: `06-phase-2-generation.md`.
@@ -602,16 +619,16 @@ Tick **Phase 1** in `README.md`. Next: `06-phase-2-generation.md`.
 | Task | Hours |
 |---|---|
 | Package skeleton, pyproject, install | 1.0 |
-| Config + sandbox + tests | 1.5 |
-| DB models + database.py | 1.5 |
+| Config + sandbox (workspace-root model) + tests | 1.5 |
+| DB models + database.py (Postgres) | 1.5 |
 | Event bus | 1.0 |
 | State schema | 0.5 |
 | repo_scanner (walk, detect) | 2.5 |
 | tree-sitter imports + graph | 3.0 |
 | Fixtures (4 sample repos) | 1.5 |
-| API + server + CLI + doctor | 3.0 |
+| API + server + doctor | 2.5 |
 | Tests + debugging | 2.5 |
-| **Total** | **~18 h (2 days)** |
+| **Total** | **~17.5 h (2 days)** |
 
 If you run over: cut fixtures to FastAPI only, and make `extract_imports` handle Python
 only. JS/Go/Java import parsing is a Phase-2 nice-to-have.

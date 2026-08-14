@@ -1,29 +1,118 @@
 # 08 — Phase 4: Execution Engine (Days 8–9)
 
-**Goal:** the generated Dockerfile builds a real image, the image loads into the kind
-cluster, the manifests apply, a pod reaches `Running`, and every single command is
-recorded in a replayable tmux session plus a hash-chained audit log.
+**Goal:** the generated Dockerfile builds a real image **on the host's own Docker
+daemon** (the app container never runs its own nested Docker), the manifests apply to
+whatever cluster is reachable through the mounted kubeconfig — or, if none is, the built
+image runs directly with `docker run` — a pod (or container) reaches `Running`, and every
+single command is recorded in a replayable tmux session plus a hash-chained audit log.
 
 This is the phase where the project stops being a code generator and becomes a
-deployment tool.
+deployment tool. It's also the phase where the Docker Compose architecture decision from
+`01-architecture.md` becomes concrete rather than conceptual — read §4.1a before
+anything else.
 
 ---
 
-## Step 4.1 — Verify the deploy path by hand first
+## Step 4.1a — Docker-outside-of-Docker: the one concept this whole phase depends on
+
+The app runs **inside a container**. It still needs to run `docker build`. The naive
+approach — installing a Docker daemon *inside* the app container and running a nested
+build — is slow, wasteful, and means the images you build are trapped inside a container
+that will be destroyed, invisible to the host's own Docker and to whatever cluster the
+host has.
+
+The actual answer, and the one `docker-compose.yml` already implements
+(`02-repo-layout.md` §2.4):
+
+```yaml
+volumes:
+  - /var/run/docker.sock:/var/run/docker.sock
+```
+
+This mounts the **host's** Docker socket into the app container. The `docker` Python SDK
+and the `docker` CLI, running inside the container, talk to that socket exactly as if
+they were running directly on the host. `docker.from_env()` needs **zero code changes**
+to pick this up — it already defaults to `unix:///var/run/docker.sock`, and that path now
+resolves to the host's real daemon instead of nothing. Images built this way are
+immediately visible to `docker images` **on the host**, and to any Kubernetes cluster the
+host's Docker also backs (kind, Docker Desktop's Kubernetes) — there is no separate
+"load the image into the cluster" step for those, unlike the fully-isolated dev-cluster
+setup described in §4.1b.
+
+This is the same pattern every CI system that builds Docker images uses — Jenkins agents,
+GitLab Runner, and CircleCI's Docker executor all mount the host socket into the build
+container rather than running Docker-in-Docker. It is well-understood and it is exactly
+why `01-architecture.md` §1.7 calls the socket mount "root-equivalent host access" and
+asks you to say that plainly rather than hand-wave it.
+
+**One consequence worth internalizing now:** the build *context* (the directory
+`docker build` reads from) must be a path the **host's** daemon can see — which, because
+of the socket mount, means it must be a path that exists on the host's filesystem, not
+just inside the app container. In practice this is automatically true here: the user's
+project lives under `./projects` on the host, bind-mounted into the app container at
+`/workspace`. When the app container passes `/workspace/my-app` as the build context to
+the host daemon, the **host** daemon does not know about `/workspace` — it needs the
+*host* path. Handle this by having the app read `DEPLOYMINT_PROJECTS_DIR` (the same env
+var used in `docker-compose.yml`) and translate `/workspace/my-app` back to
+`{DEPLOYMINT_PROJECTS_DIR}/my-app` before calling `docker build`:
+
+```python
+# deploymint/core/docker_engine.py (addition)
+import os
+from pathlib import Path
+
+
+def to_host_path(container_path: str) -> str:
+    """The Docker SDK talks to the HOST daemon via the socket mount, so any path
+    passed as a build context must be a path the host can resolve — not the
+    container's own /workspace view of it."""
+    workspace_root = Path("/workspace")
+    host_root = Path(os.environ["DEPLOYMINT_PROJECTS_DIR_HOST"])  # see below
+    rel = Path(container_path).relative_to(workspace_root)
+    return str(host_root / rel)
+```
+
+`DEPLOYMINT_PROJECTS_DIR_HOST` is a second env var, distinct from
+`DEPLOYMINT_PROJECTS_DIR` — the *host's* absolute path to the projects directory, which
+Compose can't infer on the container's behalf. Add it to `.env.example`
+(`02-repo-layout.md` §2.5):
+
+```bash
+# The ABSOLUTE path on your host machine that DEPLOYMINT_PROJECTS_DIR resolves to.
+# Required because the app builds images via your host's Docker daemon (see
+# 08-phase-4-execution.md §4.1a) and must pass it a path the host can see.
+DEPLOYMINT_PROJECTS_DIR_HOST=/Users/you/deploymint/projects
+```
+
+This is a real, slightly unusual wrinkle of the Docker-outside-of-Docker pattern —
+document it clearly rather than letting a future contributor discover it via a confusing
+`docker build` "no such file or directory" error where the file very much exists, just
+not where the host daemon is looking.
+
+---
+
+## Step 4.1b — Verify the deploy path by hand first
 
 Do this manually, end to end, before writing a line of Python. When the automated
-version breaks, you will know exactly which step differs.
+version breaks, you will know exactly which step differs. This uses a disposable `kind`
+cluster for **your own dev/testing** — see `00-prerequisites.md` §0.2 — which is a
+different thing from whatever cluster (if any) an end user's own `~/.kube/config` points
+at in production.
 
 ```bash
-docker build -f ~/.deploymint/artifacts/<run_id>/Dockerfile -t deploymint/sample-api:manual ./tests/fixtures/sample_fastapi
+kind create cluster --name deploymint-dev
 ```
 
 ```bash
-kind load docker-image deploymint/sample-api:manual --name deploymint
+docker build -f ./tests/fixtures/sample_fastapi/.deploymint/manual-test/Dockerfile -t deploymint/sample-api:manual ./tests/fixtures/sample_fastapi
 ```
 
 ```bash
-kubectl apply -f ~/.deploymint/artifacts/<run_id>/k8s-deployment.yaml -f ~/.deploymint/artifacts/<run_id>/k8s-service.yaml
+kind load docker-image deploymint/sample-api:manual --name deploymint-dev
+```
+
+```bash
+kubectl apply -f ./tests/fixtures/sample_fastapi/.deploymint/manual-test/k8s-deployment.yaml -f ./tests/fixtures/sample_fastapi/.deploymint/manual-test/k8s-service.yaml
 ```
 
 ```bash
@@ -45,11 +134,17 @@ Common failures at this step:
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| `ErrImagePull` / `ImagePullBackOff` | image not loaded into kind, or `imagePullPolicy: Always` | `kind load docker-image`, set `IfNotPresent` |
+| `ErrImagePull` / `ImagePullBackOff` | image not loaded into a kind cluster, or `imagePullPolicy: Always` | `kind load docker-image`, set `IfNotPresent` |
 | `CrashLoopBackOff` | app exits immediately — wrong CMD, missing dep | `kubectl logs <pod>` |
 | Readiness never passes | `/health` doesn't exist or wrong port | check probe path/port vs app |
 | `CreateContainerConfigError` | `readOnlyRootFilesystem` + app writes to disk | add an `emptyDir` at `/tmp` |
 | Pod `Pending` forever | resource requests exceed node capacity | lower requests |
+
+`kind load docker-image` is **only needed for kind specifically** — it exists because
+kind runs its own containerd, separate from the host Docker daemon your build just used.
+A real cloud cluster, or Docker Desktop's built-in Kubernetes, doesn't need this step at
+all; the image is already visible to it via the shared daemon. The Execution Engine
+detects which situation it's in — see §4.6.
 
 ---
 
@@ -61,21 +156,20 @@ import asyncio, shutil
 from pathlib import Path
 from datetime import datetime, timezone
 
-from deploymint.config import get_settings
-
 
 class TmuxRecorder:
-    """Records a shell session to a replayable log file.
+    """Records a shell session to a replayable log file, written next to the
+    project's own generated artifacts — see 01-architecture.md §1.8.
 
     Falls back to plain subprocess capture when tmux is unavailable — the deploy
     still works, only the replay fidelity is reduced.
     """
 
-    def __init__(self, run_id: str):
+    def __init__(self, run_id: str, repo_path: str):
         self.run_id = run_id
         self.available = shutil.which("tmux") is not None
         self.session_name = f"deploymint-{run_id}"
-        self.log_path: Path = get_settings().sessions_dir / f"{run_id}.log"
+        self.log_path: Path = Path(repo_path) / ".deploymint" / run_id / "session.log"
         self._server = None
         self._session = None
         self._pane = None
@@ -123,24 +217,27 @@ class TmuxRecorder:
 
 Honest framing: DeployMint runs its commands via `asyncio.create_subprocess_exec` and
 captures stdout/stderr directly. The tmux session is a **parallel recording surface** —
-it gives you a real terminal the user can `tmux attach` to and watch live, and a session
-file that replays.
+it gives you a real terminal you can `docker compose exec app tmux attach -t
+deploymint-<run_id>` into and watch live, and a session file that replays.
 
 Do not pretend the tmux pane is the execution path when it is not — a reviewer reading
 the code will spot it. What you *can* say truthfully and impressively:
 
 > "Every command is executed through a recorded session with full argv, stdout, stderr,
-> exit code, and a hash-chained audit entry. You can attach to the live session with
-> `tmux attach -t deploymint-<run_id>`, or replay the log afterwards."
+> exit code, and a hash-chained audit entry. You can attach to the live session, or
+> replay the log afterwards."
 
 That is a real, verifiable claim. Make `tmux attach` actually work — it is a great live
-demo moment.
+demo moment. Since tmux now runs *inside* the app container, attaching to it means
+`docker compose exec app tmux attach -t deploymint-<run_id>` rather than a bare `tmux
+attach` on the host — document this exact command in `14-command-reference.md`.
 
 ---
 
 ## Step 4.3 — Audited command runner
 
-Every shell invocation goes through this. Nothing bypasses it.
+Unchanged from a purely local design — this layer doesn't know or care whether it's
+running inside a container. Every shell invocation goes through this. Nothing bypasses it.
 
 ```python
 # deploymint/core/runner.py
@@ -219,6 +316,9 @@ async def run_command(
 
 ## Step 4.4 — Audit chain writer
 
+Unchanged in design — Postgres via the same `get_session_factory()` from
+`03-data-model.md` §3.2, just a different backing store than the original SQLite plan.
+
 ```python
 # deploymint/core/audit.py
 import hashlib, json
@@ -277,36 +377,60 @@ def verify_chain(run_id: str) -> dict:
     return {"valid": True, "broken_at_seq": None, "entries": len(rows)}
 ```
 
-Demo it: run a deploy, then `sqlite3 ~/.deploymint/deploymint.db "UPDATE audit_logs SET
-output='clean' WHERE seq=3;"`, then hit `/api/runs/{id}/audit/verify` and watch it report
-`broken_at_seq: 3`. **This takes 15 seconds and is genuinely convincing.**
+Demo it: run a deploy, then tamper with one row directly in the compose Postgres and
+re-verify:
+
+```bash
+docker compose exec db psql -U deploymint -c "UPDATE audit_logs SET output='clean' WHERE run_id='<run_id>' AND seq=3;"
+```
+
+```bash
+curl -s localhost:8000/api/runs/<run_id>/audit/verify
+```
+
+Watch it report `broken_at_seq: 3`. **This takes 15 seconds and is genuinely convincing.**
 
 ---
 
 ## Step 4.5 — Docker build with streaming
 
-Use the Docker SDK's low-level API so you get log lines as they happen.
+Use the Docker SDK's low-level API so you get log lines as they happen. **The only
+change from a purely local design is the host-path translation from §4.1a** — the
+build/streaming mechanics themselves are identical whether `docker.from_env()` is
+talking to a local daemon directly or to one via a mounted socket.
 
 ```python
 # deploymint/core/docker_engine.py
-import asyncio, json
+import asyncio, json, os
+from pathlib import Path
 import docker
 from docker.errors import BuildError, APIError, DockerException
 
 
 def get_client():
     try:
-        c = docker.from_env()
-        c.ping()
+        c = docker.from_env()   # unix:///var/run/docker.sock — the HOST's daemon,
+        c.ping()                # reachable because of the mount in docker-compose.yml
         return c
     except DockerException as e:
-        raise RuntimeError(f"Docker unreachable — is Docker Desktop running? ({e})") from e
+        raise RuntimeError(
+            f"Cannot reach the Docker daemon via the mounted socket. Is "
+            f"/var/run/docker.sock mounted in docker-compose.yml? ({e})"
+        ) from e
+
+
+def to_host_path(container_path: str) -> str:
+    """See 08-phase-4-execution.md §4.1a — build contexts must be host-visible paths."""
+    workspace_root = Path("/workspace")
+    host_root = Path(os.environ["DEPLOYMINT_PROJECTS_DIR_HOST"])
+    rel = Path(container_path).relative_to(workspace_root)
+    return str(host_root / rel)
 
 
 def _build_sync(context: str, dockerfile: str, tag: str, line_cb):
     client = get_client()
     stream = client.api.build(
-        path=context, dockerfile=dockerfile, tag=tag,
+        path=to_host_path(context), dockerfile=dockerfile, tag=tag,
         rm=True, forcerm=True, decode=True, nocache=False, pull=False,
     )
     error = None
@@ -342,18 +466,34 @@ async def build_image(context: str, dockerfile: str, tag: str, on_line) -> str:
     return await task
 ```
 
-The `loop.call_soon_threadsafe` bridge is the crux. The Docker SDK is synchronous and
-runs in a thread; your event bus is async on the main loop. Calling `await` from the
-thread would fail. This pattern — thread pushes to a threadsafe queue, main loop drains
-it — is the correct way and worth internalizing.
+**`dockerfile` is still a container-local path** (e.g.
+`/workspace/my-app/.deploymint/{run_id}/Dockerfile`) passed as the `dockerfile=` build
+arg, which the Docker API resolves *relative to the build context* — since both
+`context` and `dockerfile` get the same host-path translation applied by virtue of both
+living under the workspace mount, this works out correctly as long as `dockerfile` is
+computed as a path relative to `context` before translation, not translated
+independently. Test this explicitly; it's the one place a subtle path bug hides.
 
-**Alternative if this fights you:** shell out to `docker build` via `run_command()` with
-`on_line`. You lose nothing meaningful and it is 5 lines instead of 40. Take this option
-if you are behind schedule.
+The `loop.call_soon_threadsafe` bridge is the crux of the streaming design and is
+unchanged from a local build: the Docker SDK is synchronous and runs in a thread; your
+event bus is async on the main loop. This pattern — thread pushes to a threadsafe queue,
+main loop drains it — is worth internalizing regardless of where the daemon lives.
+
+**Alternative if the host-path translation fights you:** shell out to `docker build` via
+`run_command()` with `on_line`, and pass the host path directly as `cwd`/argument rather
+than going through the SDK's `path=` parameter. Both routes go through the same mounted
+socket either way (the CLI's default connection is also
+`unix:///var/run/docker.sock`) — this only changes how you invoke the build, not the
+DooD pattern underneath it.
 
 ---
 
-## Step 4.6 — Kubernetes engine
+## Step 4.6 — Kubernetes engine — with the `docker run` fallback
+
+This is where `01-architecture.md` §1.4 decision 12 ("the host's Kubernetes if reachable,
+else plain `docker run`") becomes real code. **This fallback did not exist in earlier
+drafts of this design** — it is new, and it is what keeps the product working for a user
+who has never touched Kubernetes.
 
 ```python
 # deploymint/core/kube_engine.py
@@ -363,23 +503,29 @@ from deploymint.config import get_settings
 
 
 def _ctx() -> list[str]:
-    return ["--context", get_settings().kube_context]
+    ctx = get_settings().kube_context
+    return ["--context", ctx] if ctx else []
 
 
 async def cluster_reachable(**kw) -> bool:
+    """The single gate that decides Kubernetes vs. plain docker run. If the mounted
+    ~/.kube/config doesn't exist, or exists but has no reachable cluster, this
+    returns False and the Execution Engine takes the docker-run path instead."""
     r = await run_command(["kubectl", *_ctx(), "cluster-info",
                            "--request-timeout=5s"], timeout=10, **kw)
     return r.ok
 
 
 async def is_kind_context() -> bool:
-    return get_settings().kube_context.startswith("kind-")
+    r = await run_command(["kubectl", *_ctx(), "config", "current-context"], timeout=5)
+    return r.ok and r.stdout.strip().startswith("kind-")
 
 
-async def kind_load(image: str, **kw):
+async def kind_load(image: str, cluster_name: str, **kw):
+    """Only relevant if the reachable cluster IS a kind cluster — see §4.1b for why."""
     return await run_command(
-        ["kind", "load", "docker-image", image,
-         "--name", get_settings().kind_cluster], timeout=180, **kw)
+        ["kind", "load", "docker-image", image, "--name", cluster_name],
+        timeout=180, **kw)
 
 
 async def apply(paths: list[str], **kw):
@@ -423,6 +569,33 @@ async def delete_deployment(name: str, **kw):
          "--ignore-not-found"], timeout=60, **kw)
 ```
 
+```python
+# deploymint/core/docker_run.py — the fallback path
+from deploymint.core.runner import run_command
+
+
+async def run_container(name: str, image: str, port: int, **kw):
+    """No cluster reachable: run the built image directly via the same mounted
+    Docker socket. This is what proves the pipeline end-to-end for a user who has
+    Docker but no Kubernetes at all."""
+    await run_command(["docker", "rm", "-f", name], timeout=15)  # clean up a prior run
+    return await run_command(
+        ["docker", "run", "-d", "--name", name, "-p", f"{port}:{port}",
+         "--label", "managed-by=deploymint", image],
+        timeout=30, **kw)
+
+
+async def container_healthy(name: str, port: int, path: str = "/health", **kw) -> bool:
+    r = await run_command(
+        ["docker", "exec", name, "curl", "-sf", f"http://localhost:{port}{path}"],
+        timeout=10, **kw)
+    return r.ok
+
+
+async def container_logs(name: str, tail: int = 100, **kw):
+    return await run_command(["docker", "logs", "--tail", str(tail), name], timeout=15, **kw)
+```
+
 ---
 
 ## Step 4.7 — The Execution Engine agent
@@ -430,25 +603,26 @@ async def delete_deployment(name: str, **kw):
 ```python
 # deploymint/agents/execution.py
 from pathlib import Path
+import asyncio
 
 from deploymint.agents.base import BaseAgent
 from deploymint.agents.state import DeployState
-from deploymint.core import docker_engine, kube_engine
+from deploymint.core import docker_engine, kube_engine, docker_run
 from deploymint.core.tmux_recorder import TmuxRecorder
 from deploymint.core.audit import AuditChain
-from deploymint.config import get_settings
 
 
 class ExecutionEngineAgent(BaseAgent):
     name = "execution"
 
     async def run(self, state: DeployState) -> dict:
-        s = get_settings()
         run_id, name = state["run_id"], state["project_name"]
-        art_dir = s.artifacts_dir / run_id
+        repo_path = state["repo_path"]
+        art_dir = Path(repo_path) / ".deploymint" / run_id
         image = f"deploymint/{name}:{run_id}"
+        port = (state.get("analysis") or {}).get("exposed_port", 8000)
 
-        rec = TmuxRecorder(run_id)
+        rec = TmuxRecorder(run_id, repo_path)
         rec.start()
         audit = AuditChain(run_id)
         kw = {"recorder": rec, "audit": audit, "on_line": self._line}
@@ -457,7 +631,7 @@ class ExecutionEngineAgent(BaseAgent):
                      "kubectl_output": "", "status": "building"}
 
         try:
-            # 1. build
+            # 1. build — via the mounted host socket, see §4.1a
             await self.emit("execution.stage", stage="build")
             build_lines: list[str] = []
 
@@ -466,10 +640,9 @@ class ExecutionEngineAgent(BaseAgent):
                 await self.emit("execution.log", line=line, stream="stdout")
 
             rec.log_command(["docker", "build", "-t", image, "-f",
-                             str(art_dir / "Dockerfile"), state["repo_path"]])
+                             str(art_dir / "Dockerfile"), repo_path])
             await docker_engine.build_image(
-                context=state["repo_path"],
-                dockerfile=str(art_dir / "Dockerfile"),
+                context=repo_path, dockerfile=str(art_dir / "Dockerfile"),
                 tag=image, on_line=collect,
             )
             dep["build_log"] = "\n".join(build_lines)[-64_000:]
@@ -477,33 +650,53 @@ class ExecutionEngineAgent(BaseAgent):
                                command=f"docker build -t {image}",
                                output=dep["build_log"][-8000:], exit_code=0)
 
-            # 2. load into kind
-            if await kube_engine.is_kind_context():
-                await self.emit("execution.stage", stage="load")
-                r = await kube_engine.kind_load(image, **kw)
-                if not r.ok:
-                    raise RuntimeError(f"kind load failed: {r.combined[:400]}")
-
-            # 3. apply
+            # 2. deploy — Kubernetes if reachable, else plain docker run
             dep["status"] = "deploying"
-            await self.emit("execution.stage", stage="apply")
-            r = await kube_engine.apply(
-                [str(art_dir / "k8s-deployment.yaml"), str(art_dir / "k8s-service.yaml")], **kw)
-            dep["kubectl_output"] = r.combined
-            if not r.ok:
-                raise RuntimeError(f"kubectl apply failed: {r.combined[:400]}")
+            if await kube_engine.cluster_reachable(**kw):
+                dep["mode"] = "kubernetes"
+                if await kube_engine.is_kind_context():
+                    await self.emit("execution.stage", stage="load")
+                    r = await kube_engine.kind_load(image, name, **kw)
+                    if not r.ok:
+                        raise RuntimeError(f"kind load failed: {r.combined[:400]}")
 
-            # 4. rollout
-            await self.emit("execution.stage", stage="rollout")
-            r = await kube_engine.rollout_status(name, **kw)
-            if not r.ok:
-                diag = await self._diagnose(name, **kw)
-                raise RuntimeError(f"rollout did not complete.\n{r.combined[:400]}\n\n{diag}")
+                await self.emit("execution.stage", stage="apply")
+                r = await kube_engine.apply(
+                    [str(art_dir / "k8s-deployment.yaml"), str(art_dir / "k8s-service.yaml")], **kw)
+                dep["kubectl_output"] = r.combined
+                if not r.ok:
+                    raise RuntimeError(f"kubectl apply failed: {r.combined[:400]}")
 
-            dep["pod_name"] = await kube_engine.get_pod_name(name, **kw)
+                await self.emit("execution.stage", stage="rollout")
+                r = await kube_engine.rollout_status(name, **kw)
+                if not r.ok:
+                    diag = await self._diagnose(name, **kw)
+                    raise RuntimeError(f"rollout did not complete.\n{r.combined[:400]}\n\n{diag}")
+
+                dep["pod_name"] = await kube_engine.get_pod_name(name, **kw)
+            else:
+                # No reachable cluster — run the built image directly. This is the
+                # path that makes the product work with only Docker installed.
+                dep["mode"] = "docker"
+                await self.emit("execution.stage", stage="docker_run")
+                r = await docker_run.run_container(name, image, port, **kw)
+                if not r.ok:
+                    raise RuntimeError(f"docker run failed: {r.combined[:400]}")
+                dep["container_id"] = r.stdout.strip()[:12]
+                dep["local_url"] = f"http://localhost:{port}"
+
+                for _ in range(15):
+                    if await docker_run.container_healthy(name, port, **kw):
+                        break
+                    await asyncio.sleep(2)
+                else:
+                    logs = await docker_run.container_logs(name, **kw)
+                    raise RuntimeError(f"container never became healthy.\n{logs.combined[-1500:]}")
+
             dep["status"] = "running"
-            await self.emit("execution.done", image_tag=image,
-                            pod_name=dep.get("pod_name"), status="running")
+            await self.emit("execution.done", image_tag=image, mode=dep["mode"],
+                            pod_name=dep.get("pod_name"), local_url=dep.get("local_url"),
+                            status="running")
             return {"deployment": dep}
 
         except Exception as e:
@@ -527,29 +720,59 @@ class ExecutionEngineAgent(BaseAgent):
         await self.emit("execution.log", line=line, stream=stream)
 ```
 
-The `_diagnose` method is what separates a usable tool from a frustrating one. When a
-rollout fails, the user gets pod events and container logs in the same response — not
-"deployment failed." Build it now, not later.
+**`dep["mode"]`, `dep["container_id"]`, `dep["local_url"]` are additions to the
+`Deployment` TypedDict** from `01-architecture.md` §1.5 — all `NotRequired`, so nothing
+that already worked breaks. The web UI's run page checks `mode` to decide whether to show
+a `kubectl port-forward` hint or a direct clickable `local_url`.
+
+The `_diagnose` method is what separates a usable tool from a frustrating one, and it's
+unchanged — when a Kubernetes rollout fails, the user gets pod events and container logs
+in the same response, not "deployment failed." The `docker run` path gets the equivalent
+treatment via `container_logs()` on a health-check timeout.
 
 ---
 
 ## Step 4.8 — Cleanup
 
-Repeated runs accumulate images and deployments. Add:
+Repeated runs accumulate images and deployments. Because the cleanup logic needs the
+same mounted Docker socket and kubeconfig the app itself uses, it runs **inside the app
+container** — there is no separate CLI tool that could do this from outside, since a
+thin external client (`09-phase-5-orchestration.md`) has no access to those mounts.
 
-```python
-# deploymint/cli.py
-@main.command()
-@click.option("--all", "wipe_all", is_flag=True, help="also remove built images")
-def clean(wipe_all):
-    """Remove DeployMint deployments (and optionally images) from the cluster."""
+```makefile
+# Makefile addition
+clean-deploys:
+	docker compose exec app python -m deploymint.scripts.clean
+
+clean-deploys-all:
+	docker compose exec app python -m deploymint.scripts.clean --all
 ```
 
-- `kubectl delete deployment,service -l managed-by=deploymint`
-- if `--all`: `docker image prune` filtered to `deploymint/*`
+```python
+# deploymint/scripts/clean.py
+import argparse
+from deploymint.core.runner import run_command
+import asyncio
 
-That `managed-by: deploymint` label in every generated manifest is what makes this
-possible. Make sure the templates and `_inject_image` both set it.
+
+async def main(wipe_images: bool):
+    await run_command(["kubectl", "delete", "deployment,service",
+                       "-l", "managed-by=deploymint", "--ignore-not-found"])
+    await run_command(["docker", "ps", "-aq", "--filter", "label=managed-by=deploymint"])
+    if wipe_images:
+        await run_command(["docker", "image", "prune", "-f",
+                           "--filter", "label=managed-by=deploymint"])
+
+
+if __name__ == "__main__":
+    p = argparse.ArgumentParser()
+    p.add_argument("--all", action="store_true", dest="wipe_images")
+    asyncio.run(main(**vars(p.parse_args())))
+```
+
+The `managed-by: deploymint` label on every generated manifest **and** on every
+`docker run` container (`docker_run.py` in §4.6) is what makes this possible. Make sure
+the templates, `_inject_image`, and `docker_run.run_container` all set it.
 
 ---
 
@@ -562,14 +785,14 @@ curl -s -X POST localhost:8000/api/projects/1/runs -H 'content-type: application
 Then, while it runs:
 
 ```bash
-tmux ls
+docker compose exec app tmux ls
 ```
 
 ```bash
-tmux attach -t deploymint-<run_id>
+docker compose exec app tmux attach -t deploymint-<run_id>
 ```
 
-After it completes:
+After it completes, **with a reachable cluster** (kubeconfig mounted, per §0.1):
 
 ```bash
 kubectl get pods -l managed-by=deploymint
@@ -579,23 +802,39 @@ kubectl get pods -l managed-by=deploymint
 kubectl port-forward svc/sample-api-svc 8081:8000 > /dev/null 2>&1 & sleep 2; curl -s localhost:8081/health; kill %1
 ```
 
+**Or with no cluster reachable at all** (comment out the kubeconfig mount in
+`docker-compose.yml` and restart to test this path):
+
+```bash
+docker ps --filter label=managed-by=deploymint
+```
+
+```bash
+curl -s localhost:8000/api/runs/<run_id> | python -c "import json,sys; print(json.load(sys.stdin)['deployment']['local_url'])"
+```
+
+Both paths, then:
+
 ```bash
 curl -s localhost:8000/api/runs/<run_id>/audit/verify
 ```
 
 ```bash
-cat ~/.deploymint/sessions/<run_id>.log | head -50
+cat ./projects/sample-api/.deploymint/<run_id>/session.log | head -50
 ```
 
 **Pass criteria:**
 
-- Run reaches `status=success`, `deployment.status="running"`
-- `kubectl get pods` shows `1/1 Running`
-- `curl localhost:8081/health` returns `{"status":"ok"}` — **the pod is real**
-- Session log contains the full `docker build` output and every kubectl command
+- With a reachable cluster: `deployment.mode="kubernetes"`, `kubectl get pods` shows
+  `1/1 Running`, `curl localhost:8081/health` returns `{"status":"ok"}`
+- With no cluster reachable: `deployment.mode="docker"`, `docker ps` shows the running
+  container, and `curl {local_url}/health` returns `{"status":"ok"}` — **this is the
+  path that must work for a user with only Docker installed**
+- Session log contains the full `docker build` output and every subsequent command
 - `audit/verify` returns `{"valid": true}` with ≥ 5 entries
 - Tampering with one audit row makes verify return `valid: false` at the right seq
 - A deliberately broken Dockerfile produces a failure that includes pod events + logs
+  (Kubernetes path) or container logs (docker run path)
 
 Tick **Phase 4**. Next: `09-phase-5-orchestration.md`.
 
@@ -605,17 +844,21 @@ Tick **Phase 4**. Next: `09-phase-5-orchestration.md`.
 
 | Task | Hours |
 |---|---|
-| Manual deploy verification | 1.0 |
+| Manual deploy verification (both paths) | 1.5 |
+| Docker-outside-of-Docker host-path translation | 1.5 |
 | tmux recorder | 2.0 |
 | Audited command runner | 2.0 |
 | Audit chain + verify endpoint | 2.0 |
 | Docker build streaming (thread bridge) | 3.0 |
-| kube_engine | 2.0 |
-| Execution agent + diagnose path | 3.0 |
-| Cleanup command | 1.0 |
+| kube_engine + docker_run fallback | 3.0 |
+| Execution agent + diagnose path (both modes) | 3.5 |
+| Cleanup script | 1.0 |
 | Debugging the deploy loop (budget generously) | 4.0 |
-| **Total** | **~20 h (2 days)** |
+| **Total** | **~23.5 h (2.5 days)** |
 
-**The deploy loop will fight you.** Wrong port, missing `/health`, read-only filesystem,
-image not loaded — each of these costs 20–40 minutes the first time. This is normal.
-The manual verification in §4.1 is what keeps it to hours instead of a full day.
+**The deploy loop will fight you, and the docker-run fallback adds a genuinely new
+failure surface.** Wrong port, missing `/health`, read-only filesystem, the host-path
+translation being off by one directory — each of these costs 20–40 minutes the first
+time. This is normal. The manual verification in §4.1b, and testing both the
+Kubernetes and docker-run paths explicitly, is what keeps it to a day and a half instead
+of three.

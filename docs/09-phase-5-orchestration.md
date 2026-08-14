@@ -436,33 +436,114 @@ one-line check that demonstrates real judgment about agent safety — mention it
 
 ---
 
-## Step 5.5 — CLI `up` as an API client
+## Step 5.5 — The thin CLI client
+
+This is the piece flagged as deferred back in `02-repo-layout.md` §2.1 and
+`05-phase-1-foundation.md` §1.11 — it's built now because this is the first point where
+there's a running, fully-functional server for it to talk to. **It is a separate,
+minimal package from the app itself**, not a Click command bolted onto
+`deploymint/cli.py` inside the container. It needs `click`, `httpx`, `websockets`,
+`rich` — nothing from `agents/`, `core/`, or `db/`, because it never runs any of that
+code; the container already running via `docker compose up -d` does.
 
 ```python
-@main.command()
-@click.argument("repo_path", type=click.Path(exists=True, file_okay=False))
+# cli/deploymint_cli/__init__.py — a genuinely separate package, `pip install deploymint-cli`
+import sys
+import click
+import httpx
+import websockets
+import asyncio
+from rich.live import Live
+from rich.table import Table
+from rich.console import Console
+
+console = Console()
+NODES = ["architect", "smith", "warden", "redteam", "execution", "oracle", "finops"]
+
+
+@click.command()
+@click.argument("path")
 @click.option("--name", default=None)
 @click.option("--force", is_flag=True, help="deploy even if security checks fail")
 @click.option("--no-deploy", is_flag=True, help="generate + scan only")
-@click.option("--server", "server_url", default=None)
-def up(repo_path, name, force, no_deploy, server_url):
-    """Analyze, generate, scan, and deploy a repository."""
+@click.option("--server", "server_url", default="http://localhost:8000",
+             envvar="DEPLOYMINT_SERVER")
+def up(path, name, force, no_deploy, server_url):
+    """Register PATH with a running DeployMint container and deploy it."""
+    try:
+        httpx.get(f"{server_url}/health", timeout=3).raise_for_status()
+    except httpx.HTTPError:
+        console.print(f"[red]Cannot reach DeployMint at {server_url}.[/] "
+                      "Is it running? Try: [cyan]docker compose up -d[/]")
+        sys.exit(3)
+
+    project_name = name or path.strip("/").split("/")[-1]
+    r = httpx.post(f"{server_url}/api/projects", json={"name": project_name, "repo_path": path})
+    if r.status_code == 409:
+        r = httpx.get(f"{server_url}/api/projects", params={"name": project_name})
+        project_id = next(p["id"] for p in r.json() if p["name"] == project_name)
+    else:
+        r.raise_for_status()
+        project_id = r.json()["id"]
+
+    r = httpx.post(f"{server_url}/api/projects/{project_id}/runs",
+                   json={"force": force, "skip_deploy": no_deploy, "trigger": "cli"})
+    run_id = r.json()["run_id"]
+
+    exit_code = asyncio.run(_stream(server_url, run_id))
+    sys.exit(exit_code)
+
+
+async def _stream(server_url: str, run_id: str) -> int:
+    ws_url = server_url.replace("http", "ws") + f"/ws/runs/{run_id}"
+    status_by_node, log_tail, final_status = {}, [], "running"
+
+    async with websockets.connect(ws_url) as ws:
+        await ws.send('{"since": 0}')
+        with Live(_render(status_by_node, log_tail), console=console, refresh_per_second=4) as live:
+            async for raw in ws:
+                import json
+                evt = json.loads(raw)
+                if evt["type"] == "node.enter":
+                    status_by_node[evt["payload"]["node"]] = "running"
+                elif evt["type"] == "node.exit":
+                    status_by_node[evt["payload"]["node"]] = "done"
+                elif evt["type"] == "execution.log":
+                    log_tail.append(evt["payload"]["line"])
+                    log_tail[:] = log_tail[-15:]
+                elif evt["type"] == "run.end":
+                    final_status = evt["payload"]["status"]
+                live.update(_render(status_by_node, log_tail))
+
+    console.print(f"\n[bold]Result:[/] {final_status}")
+    return {"success": 0, "blocked": 2}.get(final_status, 1)
+
+
+def _render(status_by_node: dict, log_tail: list[str]):
+    table = Table(show_header=False)
+    for n in NODES:
+        icon = {"running": "◐", "done": "✓"}.get(status_by_node.get(n), "○")
+        table.add_row(icon, n)
+    return table
 ```
 
-Flow:
-1. resolve the server URL (`--server`, else `DEPLOYMINT_SERVER`, else `http://127.0.0.1:8000`)
-2. `GET /health` — if it fails, print "Start the server with `deploymint server`" and exit 1
-3. `POST /api/projects` (409 → look up the existing project by name)
-4. `POST /api/projects/{id}/runs`
-5. connect to `ws://…/ws/runs/{run_id}` and render with Rich `Live`
-6. print the final summary and exit `0` on success, `2` on blocked, `1` on failure
+The `httpx.get(f"{server_url}/health", ...)` check with the `docker compose up -d` hint
+in the failure message is the CLI's entire relationship with "starting the server" — it
+never starts anything itself, because starting DeployMint is `docker compose up -d`, a
+command this package has no reason to know about beyond suggesting it.
 
-Distinct exit codes matter: they make DeployMint usable inside a CI pipeline, which is a
-real answer to "how does this fit my workflow?"
+**Distinct exit codes matter**: they make DeployMint usable inside a CI pipeline, which
+is a real answer to "how does this fit my workflow?" `0` on success, `2` on blocked,
+`1` on any other failure, `3` if the server itself is unreachable.
 
-Rich rendering: a `Live` with a per-node status table plus a scrolling tail of the last
-15 log lines. Do not print every build line to the terminal — it scrolls the useful
-information off screen.
+### Packaging the CLI
+
+Ship it as its own tiny `pip install deploymint-cli` package (its own `pyproject.toml`,
+in a `cli/` directory at the repo root, alongside — not inside — `deploymint/`). This is
+optional polish, not required for the product to work: the web dashboard is the primary
+interface (`01-architecture.md` §1.4 decision 13), and `docker compose exec app python -m
+deploymint_cli up /workspace/my-app` works identically without a separate install if you
+want to skip building it as a distinct package for the MVP.
 
 ---
 
@@ -473,7 +554,7 @@ pytest tests/test_graph.py -v
 ```
 
 ```bash
-deploymint up ./tests/fixtures/sample_fastapi --name sample-api
+deploymint up ./projects/sample-api --name sample-api
 ```
 
 ```bash
@@ -481,19 +562,23 @@ curl -s -X POST localhost:8000/api/chat -H 'content-type: application/json' -d '
 ```
 
 ```bash
-deploymint up ./tests/fixtures/poisoned_repo --name poisoned; echo "exit=$?"
+deploymint up ./projects/poisoned --name poisoned; echo "exit=$?"
 ```
 
 **Pass criteria:**
 
-- `deploymint up` streams live progress and ends with a running pod
+- `deploymint up` streams live progress against the already-running container and ends
+  with a running pod (or a running docker-run container — see `08-phase-4-execution.md`)
 - Poisoned repo exits with code `2` and prints the block reason
 - Chat `"deploy my sample-api project"` starts a real run and returns its `run_id`
 - Chat `"which project should I deploy"` asks rather than acting
 - Two browser tabs on the same run both receive the full event stream
 - A browser refresh mid-run replays the timeline from `seq=0` with nothing missing
 - `POST /api/runs/{id}/cancel` actually stops an in-flight run
-- With Ollama stopped, chat still routes via keywords and the graph still completes
+- With `ANTHROPIC_API_KEY` unset, chat still routes via keywords and the graph still
+  completes (resilience, not an offline mode — see `04-agents-spec.md` §4.10)
+- Stopping the container (`docker compose down`) and running `deploymint up` against it
+  prints the "is it running? try docker compose up -d" message and exits `3`
 
 Tick **Phase 5**. Next: `10-phase-6-finops-ui.md`.
 

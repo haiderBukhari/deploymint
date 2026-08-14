@@ -34,11 +34,17 @@ FIXTURES = Path(__file__).parent / "fixtures"
 
 
 @pytest.fixture
-def tmp_home(tmp_path, monkeypatch):
-    """Isolate DEPLOYMINT_HOME so tests never touch the real database."""
-    home = tmp_path / "dmhome"
-    home.mkdir()
-    monkeypatch.setenv("DEPLOYMINT_HOME", str(home))
+def workspace(tmp_path, monkeypatch):
+    """Isolate the sandbox root AND the database so tests never touch the real
+    Postgres data. Point DATABASE_URL at a throwaway database on the SAME Postgres
+    instance the dev container already runs — never auto-provision a second
+    database server per test run."""
+    ws = tmp_path / "workspace"
+    ws.mkdir()
+    monkeypatch.setenv("DEPLOYMINT_WORKSPACE_ROOT", str(ws))
+    monkeypatch.setenv("DATABASE_URL",
+        os.environ.get("TEST_DATABASE_URL",
+                       "postgresql+psycopg://deploymint:deploymint@localhost:5432/deploymint_test"))
 
     from deploymint.config import get_settings
     get_settings.cache_clear()
@@ -48,7 +54,7 @@ def tmp_home(tmp_path, monkeypatch):
     dbmod._SessionLocal = None
     dbmod.init_db()
 
-    yield home
+    yield ws
 
     get_settings.cache_clear()
     dbmod._engine = None
@@ -56,16 +62,17 @@ def tmp_home(tmp_path, monkeypatch):
 
 
 @pytest.fixture
-def client(tmp_home):
+def client(workspace):
     from deploymint.server import create_app
     with TestClient(create_app()) as c:
         yield c
 
 
 @pytest.fixture
-def sample_repo(tmp_path):
-    """A copy of the FastAPI fixture — tests may mutate it freely."""
-    dst = tmp_path / "sample_fastapi"
+def sample_repo(workspace):
+    """A copy of the FastAPI fixture, placed UNDER the isolated workspace root —
+    the sandbox (05-phase-1-foundation.md §1.3) rejects anything else."""
+    dst = workspace / "sample_fastapi"
     shutil.copytree(FIXTURES / "sample_fastapi", dst)
     return dst
 
@@ -94,10 +101,11 @@ def fake_llm(monkeypatch):
     return fake
 ```
 
-The `tmp_home` fixture resetting `dbmod._engine` is the crux of test isolation. Without
-it, the first test builds an engine pointed at your real database and every subsequent
-test writes there. **Verify this works before writing other tests** — run the suite twice
-and confirm `~/.deploymint/deploymint.db` is untouched.
+The `workspace` fixture resetting `dbmod._engine` is the crux of test isolation. Without
+it, the first test builds an engine pointed at your real Postgres database and every
+subsequent test writes there. **Verify this works before writing other tests** — run the
+suite twice against a real `deploymint` database and confirm its `runs`/`projects` tables
+are untouched; everything should land in `deploymint_test` instead.
 
 ---
 
@@ -249,13 +257,18 @@ async def test_model_produces_valid_artifacts_most_of_the_time():
     successes = 0
     for _ in range(5):
         out = await ArtifactSmithAgent().run(dict(BASE))
-        if out["artifacts"]["generated_by"] in ("llm", "llm+repair"):
+        if out["artifacts"]["generated_by"] == "llm":
             successes += 1
-    assert successes >= 3, f"only {successes}/5 — check prompts or model"
+    assert successes >= 4, f"only {successes}/5 — check prompts; Claude should clear this easily"
 ```
 
-Run it manually after prompt changes: `pytest -m llm -v`. Never in CI — a flaky model
-turning your build red teaches you to ignore red builds.
+Run it manually after prompt changes: `pytest -m llm -v`. It needs a real
+`ANTHROPIC_API_KEY` and costs real (small) money each run — never in CI, both because a
+flaky network call turning your build red teaches you to ignore red builds, and because
+CI shouldn't be spending API credits on every push. The bar (`>= 4/5`) is deliberately
+higher than the original 8B-local-model version of this test — Claude's structured
+output reliability means the template fallback should be the rare exception, not the
+routine case it was with a small local model.
 
 ---
 
@@ -270,30 +283,37 @@ on: [push, pull_request]
 jobs:
   test:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        python: ["3.11", "3.12"]
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: deploymint
+          POSTGRES_PASSWORD: deploymint
+          POSTGRES_DB: deploymint_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready --health-interval 5s --health-timeout 3s --health-retries 10
+    env:
+      TEST_DATABASE_URL: postgresql+psycopg://deploymint:deploymint@localhost:5432/deploymint_test
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
-        with:
-          python-version: ${{ matrix.python }}
-          cache: pip
+        with: { python-version: "3.11", cache: pip }
       - run: pip install -e ".[dev]"
       - run: ruff check deploymint tests
       - run: pytest -m "not slow and not llm" -v
+        # NOTE: no ANTHROPIC_API_KEY is set here, deliberately — this proves every
+        # test that needs to pass in CI does so via the template/keyword fallback
+        # paths, never by silently skipping when a real key happens to be absent.
 
-  build:
+  image:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with: { python-version: "3.11" }
-      - run: pip install build && python -m build
-      - name: Verify package data survives the wheel
+      - run: docker compose build
+      - name: Verify package data survives the image build
         run: |
-          python -m venv /tmp/v && /tmp/v/bin/pip install dist/*.whl
-          /tmp/v/bin/python -c "
+          docker compose run --rm --no-deps app python -c "
           from importlib.resources import files
           p = files('deploymint')
           for rel in ['policies/no_root_user.rego','data/rate_card.json','web/templates/run.html']:
@@ -301,8 +321,8 @@ jobs:
           print('package data OK')"
 ```
 
-The `build` job is the one that catches real bugs. Missing package data passes every test
-in a source checkout and breaks for the first user who runs `pip install`.
+The `image` job is the one that catches real bugs. Missing package data passes every
+test in a source checkout and breaks for the first user who runs `docker compose up`.
 
 ---
 
@@ -310,21 +330,25 @@ in a source checkout and breaks for the first user who runs `pip install`.
 
 | Scenario | Expected |
 |---|---|
-| Fresh install, no `~/.deploymint` | server creates it, boots clean |
-| `doctor` with Docker stopped | `✗` on Docker with a clear fix, exit 1 |
-| `doctor` with Ollama stopped | `✗` on Ollama with `ollama serve` hint |
-| `doctor` with no tmux | `!` warning, exit 0 |
-| Deploy with Ollama stopped | succeeds via template fallback |
-| Deploy with no cluster | fails at execution with a readable message, artifacts still saved |
+| Fresh `docker compose up -d` on an empty `./projects` | boots clean, no manual DB/config step |
+| `/api/doctor` with the Docker socket unmounted | `✗` on Docker with a clear fix, `ok: false` |
+| `/api/doctor` with `ANTHROPIC_API_KEY` unset | `✗` on the LLM check, but overall still boots — see next row |
+| Deploy with `ANTHROPIC_API_KEY` unset | succeeds via template fallback — this is the resilience path, not a failure |
+| Deploy with no kubeconfig mounted / no reachable cluster | falls back to `docker run`, `deployment.mode == "docker"`, still reaches `running` |
 | Deploy the same project twice | second run replaces the first cleanly |
 | Two runs concurrently | both complete; semaphore serializes builds |
 | Cancel mid-run | run marked `cancelled`, no orphan tmux session |
 | Refresh browser mid-run | timeline replays complete |
-| Two browser tabs, same run | both receive all events |
+| Two browser tabs, same run | both receive all events (or document the known single-queue limitation — see `09-phase-5-orchestration.md` §5.3) |
 | Register a repo with 5000+ files | truncates, warns, completes |
 | Register an empty directory | `language: unknown`, template fallback, no crash |
 | Register a path with spaces | works (no shell interpolation anywhere) |
-| Disconnect network entirely | everything works — this is the local-first promise |
+| Register a path outside `DEPLOYMINT_PROJECTS_DIR` | rejected with 400 — the sandbox is the workspace mount, nothing else |
+| Restart the `db` container mid-session | the app reconnects (`pool_pre_ping`), no crash, no data loss |
+| Disconnect network entirely | the static dashboard and any already-generated artifacts still work; **new** generation and Red Team's LLM layer degrade to templates/deterministic-only — this is expected, not a bug, per `01-architecture.md` §1.1 |
 
-That last row is worth running deliberately. Turn off wifi and do a full deploy. If it
-works, your positioning is real; if it doesn't, find out now rather than on stage.
+That last row replaces an earlier, stronger claim ("everything works offline") that no
+longer applies now that the product is online by design — see `16-decisions-log.md`.
+What should still be true offline is everything deterministic: the Architect, the
+Warden's Checkov/OPA verdict, the Execution Engine, and FinOps's numeric estimate. Verify
+that boundary explicitly rather than assuming it.

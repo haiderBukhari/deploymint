@@ -130,38 +130,56 @@ custom grammars. A recursive `walk()` checking `node.type` is 15 lines and enoug
 version (`^\s*(?:from\s+(\S+)|import\s+(\S+))`) and revisit later. The graph is a feature,
 not the product. Do not let it eat Day 2.
 
-### 6. Docker SDK for Python (60 min)
+### 6. Docker Compose + Docker SDK (90 min — required now, not optional)
+
+This project's distribution mechanism *is* Docker Compose (`01-architecture.md` §1.1),
+so this isn't a nice-to-have the way it might be elsewhere.
+
+**Compose basics (45 min):** a `services:` block per container, `volumes:` for bind
+mounts and named volumes, `depends_on: condition: service_healthy`, and `environment:`
+for injecting config. Write one two-service `docker-compose.yml` by hand (an app + a
+database) before copying `02-repo-layout.md` §2.4 — the act of writing one from scratch
+is what makes `depends_on`'s healthcheck gotcha stick.
+
+**The one concept that matters most: Docker-outside-of-Docker (30 min).** Mounting
+`/var/run/docker.sock` into a container lets code *inside* that container talk to the
+Docker daemon *outside* it — the SDK and CLI both default to that socket path, so no
+code change is needed, only an understanding of what you just granted access to (root-
+equivalent host control — `01-architecture.md` §1.7). This is standard practice in CI
+runners (Jenkins, GitLab Runner); it is not exotic, but it is unfamiliar if you haven't
+built a Docker-building tool before.
 
 ```python
 import docker
-client = docker.from_env()
-client.ping()
+client = docker.from_env()   # unix:///var/run/docker.sock — the HOST's daemon,
+client.ping()                # once that socket is mounted in
 ```
 
 You need: `client.api.build(...)` with `decode=True` for streaming logs, and image
-tagging. That's it.
+tagging. That's it on the SDK side.
 
-**Skip:** container lifecycle management, networks, volumes, compose, swarm.
+**Skip:** container networks beyond what Compose gives you for free, swarm, multi-stage
+Compose profiles.
 
 **Escape hatch:** if the SDK's streaming API fights you, `subprocess` to the `docker` CLI
-via your `run_command()` helper. You lose nothing meaningful and gain 40 lines of your life
-back. This is a legitimate choice, not a compromise.
+via your `run_command()` helper — same mounted socket either way. You lose nothing
+meaningful and gain 40 lines of your life back. This is a legitimate choice, not a
+compromise.
 
-### 7. Prompt engineering for structured output (60 min)
+### 7. Prompt engineering for structured output (45 min)
 
-Not a general skill — three specific techniques for small local models:
+With a strong hosted model, this is a smaller lift than it would be with a small local
+one, but the discipline is the same:
 
-1. **Set `format: "json"` in the Ollama request.** Constrains decoding to valid JSON.
-   Single biggest quality lever, and it's one line.
-2. **Give the exact schema in the system prompt**, with 2 concrete examples. Few-shot
-   examples do far more than instruction text with an 8B model.
-3. **Say what NOT to do explicitly.** "Return ONLY the JSON object. No markdown fences.
-   No prose before or after." Small models default to being chatty.
-
-Then **validate and repair** rather than trying to make the prompt perfect. Your Pydantic
-validator + one repair attempt + template fallback handles what prompting can't. Accept
-that ~30% of raw outputs will need repair or fallback, and design for it rather than
-chasing 100%.
+1. **State the exact JSON schema in the system prompt**, with 2 concrete few-shot
+   examples. Examples anchor output shape more reliably than prose instructions alone.
+2. **Say what NOT to do explicitly.** "Return ONLY the JSON object. No markdown fences,
+   no prose before or after." Even a strong model will occasionally wrap its answer in a
+   sentence unless told not to.
+3. **Validate, don't just trust.** A Pydantic validator + one repair attempt + template
+   fallback (`04-agents-spec.md` §4.2) catches the rare cases prompting alone can't —
+   expect this to fire far less often than it would with a small local model, but design
+   for it regardless, because "far less often" is not "never."
 
 ### 8. Rich for terminal UI (30 min)
 
@@ -225,7 +243,7 @@ Five concepts:
 state. Returning `{"errors": [...]}` **replaces** `errors` — it does not append. That's
 why every agent in this plan writes `state.get("errors", []) + [new]` explicitly.
 
-**Skip:** checkpointers/persistence (you persist to SQLite yourself), human-in-the-loop
+**Skip:** checkpointers/persistence (you persist to Postgres yourself), human-in-the-loop
 interrupts, subgraphs, `Send` API, LangSmith tracing, cyclic graphs. Your graph is a chain
 with one branch.
 
@@ -251,7 +269,7 @@ design.
 | boto3 Cost Explorer | stretch goal | 1 h |
 | Cytoscape.js | Phase 6 graph viz | 45 min — or skip and render an adjacency list |
 | HTMX | Phase 6 | 30 min — `hx-get`, `hx-post`, `hx-target`, `hx-swap`. That's genuinely all of it. |
-| LiteLLM | stretch goal | 30 min |
+| The Anthropic Python SDK's error types | Phase 2 | 20 min — `AuthenticationError`, `RateLimitError`, `APIConnectionError`; you'll branch on these in `core/llm.py` |
 
 ---
 
@@ -281,8 +299,8 @@ Every other mistake in this project produces an error message. That one produces
 | Alembic migrations | `create_all()` until v1.0 |
 | Fine-tuning / LoRA | not this quarter |
 | Vector databases | 20 few-shot examples in a JSONL file beat a vector DB at this scale |
-| Docker Compose | you deploy to K8s |
-| gRPC / message queues | one process, one SQLite file |
+| Docker Swarm / Kubernetes operators | plain Compose for distribution, plain `kubectl apply` for the user's deploy target |
+| gRPC / message queues | one process, one Postgres database |
 
 Every hour spent here is an hour not spent on the deploy loop, which is where the real
 difficulty lives.
@@ -298,8 +316,9 @@ If you have a day before Day 1:
 | Morning, 2 h | asyncio (the 5 concepts + the `to_thread` exercise) | you can predict the output of the gather exercise |
 | Morning, 1 h | FastAPI toy app | router + Depends + WebSocket echo, running |
 | Afternoon, 1 h | Pydantic v2 + `pydantic-settings` | a model with a `@field_validator` that rejects bad input |
-| Afternoon, 1 h | SQLAlchemy 2.0 | two related models, create, query, JSON column |
+| Afternoon, 1 h | SQLAlchemy 2.0 against Postgres | two related models, create, query, JSONB column |
+| Afternoon, 1 h | Docker Compose + the socket-mount concept | a two-service compose file, and you can explain in one sentence why mounting `/var/run/docker.sock` is root-equivalent access |
 | Evening, 2 h | tree-sitter | prints the import statements from a real Python file |
 
-That's 7 hours and covers everything you need through Phase 2. Learn Rego on Day 5 and
+That's 8 hours and covers everything you need through Phase 2. Learn Rego on Day 5 and
 LangGraph on Day 10 — right before you need them, when the context makes them click.
