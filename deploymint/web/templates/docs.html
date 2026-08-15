@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block title %}{{ page.title }} · Docs · DeployMint{% endblock %}
+{% block content %}
+<div class="docs-layout">
+  <nav class="docs-sidebar">
+    <div class="section-label">Documentation</div>
+    <ul class="docs-nav">
+      {% for item in nav %}
+      <li>
+        <a href="/guide/{{ item.slug }}" class="{{ 'active' if item.slug == page.slug else '' }}">{{ item.title }}</a>
+      </li>
+      {% endfor %}
+    </ul>
+  </nav>
+  <article class="docs-content markdown-body">
+    {{ content | safe }}
+  </article>
+</div>
+{% endblock %}

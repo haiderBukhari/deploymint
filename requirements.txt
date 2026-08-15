@@ -16,6 +16,9 @@ uvicorn[standard]>=0.30
 websockets>=12.0
 python-multipart>=0.0.9
 jinja2>=3.1
+# renders docs/*.md + PROJECT.md for the in-app docs viewer (/docs) — see
+# docs/20-in-app-docs.md. Pure Python, no npm/CDN dependency.
+markdown>=3.6
 
 # ---- database — Postgres, bundled as a compose service. See docs/03-data-model.md ----
 sqlalchemy>=2.0

@@ -291,3 +291,74 @@ tr:last-child td { border-bottom: none; }
   .split { grid-template-columns: 1fr; }
   .stat-row { flex-direction: column; }
 }
+
+/* --- In-app docs viewer (GitBook-style sidebar + page) --- */
+.docs-layout { display: grid; grid-template-columns: 240px 1fr; gap: 2rem; align-items: start; }
+
+.docs-sidebar {
+  position: sticky;
+  top: 4.5rem;
+  max-height: calc(100vh - 5.5rem);
+  overflow-y: auto;
+}
+.docs-nav { list-style: none; padding: 0; margin: 0; }
+.docs-nav li { margin-bottom: 0.1rem; }
+.docs-nav a {
+  display: block;
+  padding: 0.35rem 0.6rem;
+  border-radius: 6px;
+  color: var(--muted);
+  font-size: 0.85rem;
+  font-weight: 500;
+}
+.docs-nav a:hover { background: var(--bg-subtle); color: var(--text); text-decoration: none; }
+.docs-nav a.active { background: var(--mint-soft); color: var(--mint); font-weight: 600; }
+
+.docs-content {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 2rem;
+  box-shadow: var(--shadow);
+  min-width: 0;
+  overflow-x: auto;
+}
+
+.markdown-body h1 { font-size: 1.6rem; margin-top: 0; }
+.markdown-body h2 { font-size: 1.25rem; margin-top: 2rem; padding-top: 0.5rem; border-top: 1px solid var(--border); }
+.markdown-body h2:first-child { border-top: none; margin-top: 0; padding-top: 0; }
+.markdown-body h3 { font-size: 1.05rem; margin-top: 1.5rem; }
+.markdown-body p, .markdown-body ul, .markdown-body ol { line-height: 1.65; }
+.markdown-body a { color: var(--blue); }
+.markdown-body code {
+  background: var(--bg-subtle);
+  border-radius: 4px;
+  padding: 0.1rem 0.35rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.85em;
+}
+.markdown-body pre {
+  background: #0d1117;
+  color: #d8dee9;
+  border-radius: 8px;
+  padding: 1rem;
+  overflow-x: auto;
+}
+.markdown-body pre code { background: none; padding: 0; color: inherit; }
+.markdown-body blockquote {
+  border-left: 3px solid var(--mint);
+  margin: 1rem 0;
+  padding: 0.3rem 1rem;
+  color: var(--muted);
+  background: var(--mint-soft);
+  border-radius: 0 6px 6px 0;
+}
+.markdown-body table { margin: 1rem 0; }
+.markdown-body th, .markdown-body td { border: 1px solid var(--border); padding: 0.5rem 0.75rem; }
+.markdown-body hr { border: none; border-top: 1px solid var(--border); margin: 2rem 0; }
+.markdown-body img { max-width: 100%; }
+
+@media (max-width: 800px) {
+  .docs-layout { grid-template-columns: 1fr; }
+  .docs-sidebar { position: static; max-height: none; }
+}

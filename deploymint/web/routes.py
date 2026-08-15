@@ -13,6 +13,7 @@ from deploymint.core.sandbox import SandboxError, validate_repo_path
 from deploymint.db.database import get_db
 from deploymint.db.models import Project, Run
 from deploymint.runner.manager import start_run
+from deploymint.web import docs_content
 
 router = APIRouter()
 WEB_DIR = Path(__file__).parent
@@ -90,3 +91,24 @@ def run_page(request: Request, run_id: str, db: Session = Depends(get_db)):
 def costs_page(request: Request):
     breakdown = _sample_export_by_service()
     return templates.TemplateResponse(request, "costs.html", {"breakdown": breakdown})
+
+
+# NOTE: this is intentionally /guide, not /docs — FastAPI's own /docs is its
+# built-in interactive Swagger UI (see deploymint/server.py's default
+# docs_url), and this route would silently never register if it collided
+# with that path. Found by writing a test that actually hit the route.
+@router.get("/guide", response_class=HTMLResponse)
+def docs_index(request: Request):
+    first = docs_content.NAV[0]
+    return docs_page(request, first.slug)
+
+
+@router.get("/guide/{slug}", response_class=HTMLResponse)
+def docs_page(request: Request, slug: str):
+    page = docs_content.get_page(slug)
+    if not page:
+        return HTMLResponse("Doc page not found", status_code=404)
+    html = docs_content.render(page)
+    return templates.TemplateResponse(
+        request, "docs.html",
+        {"nav": docs_content.NAV, "page": page, "content": html})

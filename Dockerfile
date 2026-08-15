@@ -38,5 +38,10 @@ COPY deploymint/ ./deploymint/
 COPY pyproject.toml .
 RUN pip install --no-cache-dir -e .
 
+# The in-app docs viewer (deploymint/web/docs_content.py) reads these at
+# runtime — same relative layout as a local dev checkout (repo root next to
+# the deploymint/ package), so no path translation needed between the two.
+COPY docs/ ./docs/
+
 EXPOSE 8000
 CMD ["uvicorn", "deploymint.server:app", "--host", "0.0.0.0", "--port", "8000"]
