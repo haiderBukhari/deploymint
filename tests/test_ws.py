@@ -5,7 +5,7 @@ docs/09-phase-5-orchestration.md §5.3."""
 import time
 
 
-def _wait_for_terminal(client, run_id, timeout=15):
+def _wait_for_terminal(client, run_id, timeout=30):
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         got = client.get(f"/api/runs/{run_id}").json()

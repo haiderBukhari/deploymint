@@ -9,6 +9,12 @@ FILENAMES = {
     "dockerignore": ".dockerignore",
     "k8s_deployment": "k8s-deployment.yaml",
     "k8s_service": "k8s-service.yaml",
+    "terraform": "terraform/main.tf",
+    "ansible_playbook": "ansible/playbook.yml",
+    "argocd_application": "argocd/application.yaml",
+    "github_actions_workflow": ".github/workflows/deploy.yml",
+    "prometheus_servicemonitor": "monitoring/servicemonitor.yaml",
+    "grafana_dashboard": "monitoring/grafana-dashboard.json",
 }
 
 
@@ -20,7 +26,9 @@ def write_artifacts(run_id: str, repo_path: str, artifacts: dict) -> Path:
     for key, fname in FILENAMES.items():
         content = artifacts.get(key)
         if content:
-            (d / fname).write_text(content)
+            path = d / fname
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(content)
     (d / "manifest.json").write_text(json.dumps({
         "run_id": run_id,
         "generated_by": artifacts.get("generated_by"),

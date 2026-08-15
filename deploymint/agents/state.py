@@ -30,6 +30,14 @@ class Artifacts(TypedDict):
     generated_by: Literal["llm", "template"]
     model_used: str
     reasoning: NotRequired[str]  # Claude's own explanation; empty on the template path
+    # Always deterministically generated regardless of generated_by — see
+    # agents/templates.py's render_extra_artifacts() module docstring for why.
+    terraform: NotRequired[str]
+    ansible_playbook: NotRequired[str]
+    argocd_application: NotRequired[str]
+    github_actions_workflow: NotRequired[str]
+    prometheus_servicemonitor: NotRequired[str]
+    grafana_dashboard: NotRequired[str]
 
 
 class Finding(TypedDict):

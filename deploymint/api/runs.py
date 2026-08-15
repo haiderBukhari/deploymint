@@ -14,6 +14,12 @@ _ARTIFACT_FILENAMES = {
     ".dockerignore": "dockerignore",
     "k8s-deployment.yaml": "k8s_deployment",
     "k8s-service.yaml": "k8s_service",
+    "terraform/main.tf": "terraform",
+    "ansible/playbook.yml": "ansible_playbook",
+    "argocd/application.yaml": "argocd_application",
+    ".github/workflows/deploy.yml": "github_actions_workflow",
+    "monitoring/servicemonitor.yaml": "prometheus_servicemonitor",
+    "monitoring/grafana-dashboard.json": "grafana_dashboard",
 }
 
 
@@ -72,7 +78,7 @@ def get_audit_verify(run_id: str, db: Session = Depends(get_db)):
     return verify_chain(run_id)
 
 
-@router.get("/api/runs/{run_id}/artifacts/{filename}")
+@router.get("/api/runs/{run_id}/artifacts/{filename:path}")
 def get_artifact_file(run_id: str, filename: str, db: Session = Depends(get_db)):
     run = db.get(Run, run_id)
     if not run:

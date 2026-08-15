@@ -160,7 +160,16 @@ async function wireArtifactTabs(runId) {
   async function load(filename) {
     const r = await fetch(`/api/runs/${runId}/artifacts/${filename}`);
     const text = r.ok ? await r.text() : "(not generated)";
-    preview.innerHTML = filename.endsWith(".yaml") ? highlightYaml(text) : highlightDockerfile(text);
+    if (filename.endsWith(".yaml") || filename.endsWith(".yml")) {
+      preview.innerHTML = highlightYaml(text);
+    } else if (filename === "Dockerfile") {
+      preview.innerHTML = highlightDockerfile(text);
+    } else {
+      // .tf, .json, and anything else: escape only, no keyword highlighting —
+      // a small hand-rolled highlighter for two formats is worth it; one for
+      // every IaC format DeployMint now generates is not.
+      preview.textContent = text;
+    }
   }
 
   tabs.querySelectorAll(".tab").forEach((btn) => {

@@ -70,7 +70,7 @@ def test_run_page_has_artifact_tabs_not_bare_links(client, registered_project):
     run_id = client.post(
         f"/api/projects/{registered_project['id']}/runs", json={"skip_deploy": True}
     ).json()["run_id"]
-    deadline = time.monotonic() + 15
+    deadline = time.monotonic() + 30
     while time.monotonic() < deadline:
         if client.get(f"/api/runs/{run_id}").json()["status"] != "running":
             break

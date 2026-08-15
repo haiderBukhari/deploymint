@@ -39,6 +39,7 @@ async def run_checkov(directory: Path) -> tuple[list[dict], str | None]:
     proc = await asyncio.create_subprocess_exec(
         "checkov", "--directory", str(directory),
         "--framework", "dockerfile", "--framework", "kubernetes",
+        "--framework", "terraform", "--framework", "github_actions",
         "--output", "json", "--quiet", "--compact",
         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
     )

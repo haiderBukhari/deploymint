@@ -68,6 +68,7 @@ class ArtifactSmithAgent(BaseAgent):
                 "generated_by": how,
                 "model_used": s.model if how == "llm" else "none",
                 "reasoning": artifacts.reasoning,
+                **templates.render_extra_artifacts(analysis, project_name, image, state["run_id"]),
             }
         }
         if err and how == "template":

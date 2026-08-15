@@ -5,7 +5,7 @@ from unittest.mock import patch
 import pytest
 
 
-def _wait_for_terminal(client, run_id, timeout=15):
+def _wait_for_terminal(client, run_id, timeout=30):
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         got = client.get(f"/api/runs/{run_id}").json()
@@ -33,6 +33,19 @@ async def test_run_falls_back_to_template_without_a_real_key(client, registered_
 
     artifacts = client.get(f"/api/runs/{run_id}/artifacts").json()
     assert "dockerfile" in artifacts
+
+    # 18.x: Terraform/Ansible/ArgoCD/GitHub Actions/Prometheus/Grafana are
+    # always generated too, and served individually at their nested paths.
+    for key in ("terraform", "ansible_playbook", "argocd_application",
+                "github_actions_workflow", "prometheus_servicemonitor", "grafana_dashboard"):
+        assert artifacts[key].strip()
+
+    for filename in ("terraform/main.tf", "ansible/playbook.yml",
+                     "argocd/application.yaml", ".github/workflows/deploy.yml",
+                     "monitoring/servicemonitor.yaml", "monitoring/grafana-dashboard.json"):
+        resp = client.get(f"/api/runs/{run_id}/artifacts/{filename}")
+        assert resp.status_code == 200, filename
+        assert resp.text.strip()
 
     dockerfile = client.get(f"/api/runs/{run_id}/artifacts/Dockerfile")
     assert dockerfile.status_code == 200

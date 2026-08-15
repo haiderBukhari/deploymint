@@ -80,7 +80,8 @@ spec:
   selector:
     app: {name}
   ports:
-    - port: {port}
+    - name: http
+      port: {port}
       targetPort: {port}
 """
 
@@ -268,3 +269,305 @@ def render(analysis: dict, project_name: str, image: str) -> GeneratedArtifacts:
     key = (analysis.get("language"), analysis.get("framework"))
     fn = REGISTRY.get(key) or REGISTRY.get((analysis.get("language"), "*")) or _generic
     return fn(analysis, project_name, image)
+
+
+# ---------------------------------------------------------------------------
+# Extra IaC artifacts (Terraform / Ansible / ArgoCD / GitHub Actions /
+# Prometheus / Grafana). These are always DETERMINISTIC — never LLM-generated
+# — because they're one step removed from "does the app run": generating them
+# wrong doesn't break a deploy the way a bad Dockerfile does, but strict
+# correctness (valid HCL, a real ServiceMonitor selector) matters more than
+# per-repo customization for infra scaffolding like this. None of these are
+# ever executed by DeployMint itself — they're written for the user to run
+# (`terraform apply`, `ansible-playbook`, commit to a GitOps repo) on their
+# own, so there's no execution-safety concern the way there is for the
+# Dockerfile/K8s path. See docs/18-iac-generation.md.
+# ---------------------------------------------------------------------------
+
+
+def render_terraform(name: str, image: str, port: int) -> str:
+    ecr_repo = name.replace("_", "-")
+    return f"""\
+terraform {{
+  required_version = ">= 1.5"
+  required_providers {{
+    aws = {{
+      source  = "hashicorp/aws"
+      version = "~> 5.0"
+    }}
+  }}
+}}
+
+variable "aws_region" {{
+  description = "AWS region to deploy into."
+  type        = string
+  default     = "us-east-1"
+}}
+
+# EKS costs real money and takes ~15-20 minutes to provision — opt in
+# explicitly rather than creating a cluster by default.
+variable "create_cluster" {{
+  description = "Provision a new EKS cluster. Leave false to just get the ECR repo and push into an existing cluster."
+  type        = bool
+  default     = false
+}}
+
+provider "aws" {{
+  region = var.aws_region
+}}
+
+resource "aws_ecr_repository" "{ecr_repo}" {{
+  name                 = "{ecr_repo}"
+  image_tag_mutability = "IMMUTABLE"
+
+  image_scanning_configuration {{
+    scan_on_push = true
+  }}
+}}
+
+resource "aws_ecr_lifecycle_policy" "{ecr_repo}" {{
+  repository = aws_ecr_repository.{ecr_repo}.name
+  policy = jsonencode({{
+    rules = [{{
+      rulePriority = 1
+      description  = "Expire untagged images after 14 days"
+      selection = {{
+        tagStatus   = "untagged"
+        countType   = "sinceImagePushed"
+        countUnit   = "days"
+        countNumber = 14
+      }}
+      action = {{ type = "expire" }}
+    }}]
+  }})
+}}
+
+module "eks" {{
+  count   = var.create_cluster ? 1 : 0
+  source  = "terraform-aws-modules/eks/aws"
+  version = "~> 20.0"
+
+  cluster_name    = "{ecr_repo}-cluster"
+  cluster_version = "1.29"
+
+  cluster_endpoint_public_access = true
+
+  eks_managed_node_groups = {{
+    default = {{
+      instance_types = ["t3.medium"]
+      min_size       = 1
+      max_size       = 3
+      desired_size   = {2 if port else 1}
+    }}
+  }}
+}}
+
+output "ecr_repository_url" {{
+  value = aws_ecr_repository.{ecr_repo}.repository_url
+}}
+
+output "cluster_name" {{
+  value = var.create_cluster ? module.eks[0].cluster_name : null
+}}
+"""
+
+
+def render_ansible(name: str, image: str, port: int) -> str:
+    return f"""\
+---
+# Deploys {name} directly via Docker on a remote host — a different
+# deployment model from the Kubernetes path (docker run, not a cluster).
+# Run with: ansible-playbook -i <your-inventory> playbook.yml
+- name: Deploy {name}
+  hosts: "{{{{ target_hosts | default('all') }}}}"
+  become: true
+  vars:
+    image: "{image}"
+    container_name: "{name}"
+    container_port: {port}
+
+  tasks:
+    - name: Ensure Docker is installed
+      package:
+        name: docker.io
+        state: present
+
+    - name: Ensure the Docker service is running
+      service:
+        name: docker
+        state: started
+        enabled: true
+
+    - name: Pull the image
+      community.docker.docker_image:
+        name: "{{{{ image }}}}"
+        source: pull
+
+    - name: Remove any previous container with this name
+      community.docker.docker_container:
+        name: "{{{{ container_name }}}}"
+        state: absent
+      ignore_errors: true
+
+    - name: Run the container
+      community.docker.docker_container:
+        name: "{{{{ container_name }}}}"
+        image: "{{{{ image }}}}"
+        state: started
+        restart_policy: unless-stopped
+        published_ports:
+          - "{{{{ container_port }}}}:{{{{ container_port }}}}"
+        healthcheck:
+          test: ["CMD", "true"]
+"""
+
+
+def render_argocd(name: str, run_id: str) -> str:
+    return f"""\
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: {name}
+  namespace: argocd
+  labels: {{ {_labels(name)} }}
+spec:
+  project: default
+  source:
+    # Point this at the git repo that holds the generated manifests —
+    # DeployMint writes them under .deploymint/{run_id}/ in your own repo,
+    # this just needs your remote URL filled in.
+    repoURL: <YOUR_GIT_REPO_URL>
+    targetRevision: HEAD
+    path: .deploymint/{run_id}
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: default
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+"""
+
+
+def render_github_actions(name: str, port: int) -> str:
+    return f"""\
+name: Build and push {name}
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{{{ github.actor }}}}
+          password: ${{{{ secrets.GITHUB_TOKEN }}}}
+
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ghcr.io/${{{{ github.repository_owner }}}}/{name}:${{{{ github.sha }}}}
+
+      # Swap this step for `kubectl apply` / `argocd app sync` / your own
+      # deploy trigger once the registry above matches where you actually push.
+      - name: Deployment reminder
+        run: echo "Image pushed. Wire this job to your deploy step (kubectl apply, ArgoCD sync, etc.)."
+"""
+
+
+def render_prometheus_servicemonitor(name: str, port: int) -> str:
+    return f"""\
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {name}
+  labels: {{ {_labels(name)} }}
+spec:
+  selector:
+    matchLabels:
+      app: {name}
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 30s
+"""
+
+
+def render_grafana_dashboard(name: str) -> str:
+    import json
+
+    dashboard = {
+        "title": f"{name} — DeployMint",
+        "uid": f"deploymint-{name}"[:40],
+        "schemaVersion": 39,
+        "tags": ["deploymint", name],
+        "timezone": "browser",
+        "panels": [
+            {
+                "id": 1, "title": "CPU usage",
+                "type": "timeseries",
+                "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+                "targets": [{
+                    "expr": f'sum(rate(container_cpu_usage_seconds_total{{pod=~"{name}.*"}}[5m]))',
+                    "legendFormat": "cpu",
+                }],
+            },
+            {
+                "id": 2, "title": "Memory usage",
+                "type": "timeseries",
+                "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
+                "targets": [{
+                    "expr": f'sum(container_memory_working_set_bytes{{pod=~"{name}.*"}})',
+                    "legendFormat": "memory",
+                }],
+            },
+            {
+                "id": 3, "title": "Request rate",
+                "type": "timeseries",
+                "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8},
+                "targets": [{
+                    "expr": f'sum(rate(http_requests_total{{job="{name}"}}[5m]))',
+                    "legendFormat": "requests/s",
+                }],
+            },
+            {
+                "id": 4, "title": "Restarts",
+                "type": "stat",
+                "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8},
+                "targets": [{
+                    "expr": f'sum(kube_pod_container_status_restarts_total{{pod=~"{name}.*"}})',
+                    "legendFormat": "restarts",
+                }],
+            },
+        ],
+    }
+    return json.dumps(dashboard, indent=2)
+
+
+def render_extra_artifacts(analysis: dict, name: str, image: str, run_id: str) -> dict:
+    """Always generated, regardless of whether the Dockerfile/K8s path used
+    the LLM or the template fallback — see the module docstring above for why
+    these stay deterministic."""
+    port = analysis.get("exposed_port", 8000)
+    return {
+        "terraform": render_terraform(name, image, port),
+        "ansible_playbook": render_ansible(name, image, port),
+        "argocd_application": render_argocd(name, run_id),
+        "github_actions_workflow": render_github_actions(name, port),
+        "prometheus_servicemonitor": render_prometheus_servicemonitor(name, port),
+        "grafana_dashboard": render_grafana_dashboard(name),
+    }

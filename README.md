@@ -44,8 +44,8 @@ pod, in about a minute.
 | Cost estimation from generated manifests + natural-language cost queries | ✅ working |
 | Live AWS Cost Explorer connection (set `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`) | ✅ working |
 | Local LLM support (Ollama/vLLM/LM Studio, OpenAI-compatible) as an alternative to Claude | ✅ working |
-| Terraform / Ansible / ArgoCD / GitHub Actions generation | 🚧 not planned (deliberately out of scope) |
-| Prometheus / Grafana manifest generation | 🚧 not planned (deliberately out of scope) |
+| Terraform / Ansible / ArgoCD / GitHub Actions generation | ✅ working (deterministic templates, always generated) |
+| Prometheus ServiceMonitor / Grafana dashboard generation | ✅ working (deterministic templates, always generated) |
 | Managed cloud clusters (EKS/GKE/AKS) via a connected account, not just a local kubeconfig | 🚧 planned |
 
 ## Requirements
@@ -126,6 +126,7 @@ reviewer can see exactly why the codebase looks the way it does.
 | 15 | [15-learning-path.md](docs/15-learning-path.md) | What to learn, in what order, with time budgets |
 | 16 | [16-decisions-log.md](docs/16-decisions-log.md) | The full round trip — every direction this project considered and why it landed here |
 | 17 | [17-pending-work.md](docs/17-pending-work.md) | Post-Phase-7 gap analysis vs. the original proposal — all items done, kept as a record |
+| 18 | [18-iac-generation.md](docs/18-iac-generation.md) | Terraform/Ansible/ArgoCD/GitHub Actions/Prometheus/Grafana generation — why it's deterministic, never LLM-generated |
 
 ---
 

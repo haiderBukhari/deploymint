@@ -48,6 +48,32 @@ async def test_template_output_passes(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_checkov_scans_terraform_and_github_actions_too(tmp_path):
+    """18.7: Checkov's --framework list was extended to cover the new IaC
+    artifact types, not just Dockerfile/K8s. Real subprocess call, not mocked."""
+    from deploymint.agents import templates
+
+    analysis = {"language": "python", "framework": "fastapi", "python_version": "3.11",
+               "entrypoint": "main.py", "exposed_port": 8000, "package_manager": "pip"}
+    art = templates.render(analysis, "good", "deploymint/good:t")
+    extra = templates.render_extra_artifacts(analysis, "good", "deploymint/good:t", "run_good2")
+    out = await SecurityWardenAgent().run(
+        {"run_id": "run_good2", "repo_path": str(tmp_path),
+         "artifacts": art.model_dump() | extra | {"generated_by": "template"},
+         "errors": []}
+    )
+    sec = out["security"]
+    assert sec["checkov_ran"] is True
+    sources_scanned = {f["file"] for f in sec["findings"]}
+    # The generated Terraform/GHA templates have a couple of known, non-blocking
+    # (medium) findings — proving checkov actually walked those files, not just
+    # silently ignored them because they weren't in --framework.
+    assert any(f.endswith(".tf") for f in sources_scanned) or any(
+        "deploy.yml" in f for f in sources_scanned
+    ), sec["findings"]
+
+
+@pytest.mark.asyncio
 async def test_critical_and_high_findings_get_llm_explanations(tmp_path):
     """17.3: explanations are generated for critical/high findings only, and
     never block the run even if the LLM call fails for one of them."""
