@@ -42,8 +42,10 @@ pod, in about a minute.
 | Deploys to your existing Kubernetes cluster, or plain `docker run` if you have none | ✅ working |
 | Observability Oracle — watches a fresh deploy, rolls back on CrashLoopBackOff/OOM/restarts | ✅ working |
 | Cost estimation from generated manifests + natural-language cost queries | ✅ working |
-| Terraform / Ansible / ArgoCD / GitHub Actions generation | 🚧 planned |
-| Live AWS Cost Explorer connection | 🚧 planned (sample data today) |
+| Live AWS Cost Explorer connection (set `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`) | ✅ working |
+| Local LLM support (Ollama/vLLM/LM Studio, OpenAI-compatible) as an alternative to Claude | ✅ working |
+| Terraform / Ansible / ArgoCD / GitHub Actions generation | 🚧 not planned (deliberately out of scope) |
+| Prometheus / Grafana manifest generation | 🚧 not planned (deliberately out of scope) |
 | Managed cloud clusters (EKS/GKE/AKS) via a connected account, not just a local kubeconfig | 🚧 planned |
 
 ## Requirements
@@ -123,6 +125,7 @@ reviewer can see exactly why the codebase looks the way it does.
 | 14 | [14-command-reference.md](docs/14-command-reference.md) | Every `docker compose` / CLI / API command, one page |
 | 15 | [15-learning-path.md](docs/15-learning-path.md) | What to learn, in what order, with time budgets |
 | 16 | [16-decisions-log.md](docs/16-decisions-log.md) | The full round trip — every direction this project considered and why it landed here |
+| 17 | [17-pending-work.md](docs/17-pending-work.md) | Post-Phase-7 gap analysis vs. the original proposal — all items done, kept as a record |
 
 ---
 

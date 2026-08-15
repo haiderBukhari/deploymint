@@ -1,9 +1,13 @@
 # 17 — Pending Work: Gaps Found After Phase 7
 
+**Status: all items below (17.1–17.6) are done and committed.** Kept as a permanent
+record of the gap analysis and the reasoning behind each fix, same as
+`16-decisions-log.md`.
+
 Phases 1–7 are complete and committed (see the README's progress tracker). This doc
-tracks what's left, found by actually cross-checking the running app against
+tracked what was left, found by actually cross-checking the running app against
 `PROJECT.md`'s original proposal rather than re-reading the phase docs. Two categories:
-data the pipeline already computes but throws away before it reaches the user, and
+data the pipeline already computed but threw away before it reached the user, and
 real proposal features never built. Terraform/Ansible/ArgoCD/GitHub Actions generation
 and Prometheus/Grafana manifests are explicitly OUT of scope — decided against, not
 forgotten.
@@ -15,7 +19,7 @@ forgotten.
 None of these need new agents or new architecture. Each one is data that exists in
 memory during a run and is silently dropped before it reaches the DB or the UI.
 
-### 17.1 — `reasoning` field discarded
+### 17.1 — `reasoning` field discarded ✅
 
 `GeneratedArtifacts.reasoning` (`schemas/artifacts.py`) is populated by every LLM
 generation call — Claude's own 2-3 sentence explanation of why it made the choices it
@@ -29,7 +33,7 @@ persisted `artifacts` dict from the `GeneratedArtifacts` object but never copies
   string on the template path, where there's nothing to reason about)
 - `run.html` / `app.js`: show it under the Artifacts panel
 
-### 17.2 — `critical_files` never surfaced
+### 17.2 — `critical_files` never surfaced ✅
 
 The Architect computes a PageRank-ranked list of the most-depended-on files
 (`graph_builder.rank_criticality`) — this is one of the proposal's headline claims
@@ -43,7 +47,7 @@ the Cytoscape graph.
   (e.g. a border or fill color) so the graph visually answers "what's critical" instead
   of just "what imports what"
 
-### 17.3 — Finding `explanation` never generated
+### 17.3 — Finding `explanation` never generated ✅
 
 `docs/07-phase-3-security.md` §4.3b specifies an LLM one-liner explaining the concrete
 risk of each `critical`/`high` finding in plain language (`FINDING_EXPLANATION_PROMPT`
@@ -56,7 +60,7 @@ in the schema and always empty.
   gates `passed`, a failure here is silently skipped, not surfaced as an error)
 - `run.html`: show `finding.explanation` under each finding when present
 
-### 17.4 — Artifacts are bare download links
+### 17.4 — Artifacts are bare download links ✅
 
 The run page's Artifacts panel is four `<a>` tags to raw text — no inline preview, no
 syntax highlighting, despite `docs/10-phase-6-finops-ui.md`'s own mockup describing
@@ -73,7 +77,7 @@ applies).
 
 ## Tier 2 — real proposal features, not built
 
-### 17.5 — Live AWS Cost Explorer
+### 17.5 — Live AWS Cost Explorer ✅
 
 Today: `api/costs.py` always reads the bundled sample JSON export
 (`data/sample_cost_export.json`) plus local per-run estimates. The proposal calls for a
@@ -90,10 +94,13 @@ like the real API response so this would be a source swap, not a rewrite
   live if credentials are present, sample JSON otherwise (mirrors the LLM
   resilience pattern — always degrade to a working state, never hard-fail)
 - `/api/doctor`: new check reporting which cost source is active
-- boto3 stays an optional dependency (`pyproject.toml`'s existing `[aws]` extra) —
-  installing it is what turns the source on, no separate feature flag needed
+- **Revised during implementation:** boto3 was made a base dependency instead of the
+  `[aws]` extra originally sketched here — the whole point of the Docker Compose shape
+  is zero extra setup, so requiring a rebuild with an extra to get a working cost
+  source would have fought that goal. Setting the AWS env vars is the entire
+  activation step now.
 
-### 17.6 — Model router (no more hardcoded Claude)
+### 17.6 — Model router (no more hardcoded Claude) ✅
 
 Today: every LLM call goes through `core/llm.py`'s `complete()`, which constructs an
 `anthropic.Anthropic` client directly. There is no provider abstraction anywhere —
