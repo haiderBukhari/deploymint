@@ -43,6 +43,48 @@ def test_switching_provider_via_settings_produces_a_fresh_instance(monkeypatch):
     assert type(first).__name__ == "AnthropicProvider"
     assert type(second).__name__ == "OpenAICompatibleProvider"
     get_settings.cache_clear()
+
+
+def test_openai_provider_defaults_to_the_real_api_url(monkeypatch):
+    """DEPLOYMINT_LLM_PROVIDER=openai reuses OpenAICompatibleProvider (same
+    chat-completions shape as the real API) but defaults its base_url to
+    OpenAI's actual endpoint and reads OPENAI_API_KEY, not ANTHROPIC_API_KEY."""
+    from deploymint.config import get_settings
+
+    monkeypatch.setenv("DEPLOYMINT_LLM_PROVIDER", "openai")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-oai-test")
+    monkeypatch.delenv("DEPLOYMINT_LLM_BASE_URL", raising=False)
+    get_settings.cache_clear()
+    llm._provider = None
+    llm._provider_key = None
+
+    provider = llm.get_provider()
+    assert type(provider).__name__ == "OpenAICompatibleProvider"
+    assert provider._base_url == "https://api.openai.com/v1"
+    assert provider._api_key == "sk-oai-test"
+
+    get_settings.cache_clear()
+    llm._provider = None
+    llm._provider_key = None
+
+
+def test_openai_provider_respects_an_explicit_base_url_override(monkeypatch):
+    """E.g. an Azure OpenAI or OpenAI-proxy deployment."""
+    from deploymint.config import get_settings
+
+    monkeypatch.setenv("DEPLOYMINT_LLM_PROVIDER", "openai")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-oai-test")
+    monkeypatch.setenv("DEPLOYMINT_LLM_BASE_URL", "https://my-proxy.example.com/v1")
+    get_settings.cache_clear()
+    llm._provider = None
+    llm._provider_key = None
+
+    provider = llm.get_provider()
+    assert provider._base_url == "https://my-proxy.example.com/v1"
+
+    get_settings.cache_clear()
+    llm._provider = None
+    llm._provider_key = None
     llm._provider = None
     llm._provider_key = None
 

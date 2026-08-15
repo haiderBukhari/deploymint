@@ -27,11 +27,13 @@ class Settings(BaseSettings):
     llm_timeout: int = 120
 
     # llm provider seam — see docs/17-pending-work.md §17.6. "anthropic" is the
-    # default and only what's been production-tested; "openai_compatible" talks
-    # to any local runtime that speaks the OpenAI chat-completions shape
-    # (Ollama, vLLM, LM Studio), via llm_base_url, e.g.
-    # http://host.docker.internal:11434/v1 for a host-run Ollama.
-    llm_provider: Literal["anthropic", "openai_compatible"] = "anthropic"
+    # default and only what's been production-tested.
+    # "openai" talks to the real OpenAI API (gpt-4o etc.) using OPENAI_API_KEY.
+    # "openai_compatible" talks to any LOCAL runtime that speaks the same
+    # chat-completions shape (Ollama, vLLM, LM Studio) via llm_base_url, e.g.
+    # http://host.docker.internal:11434/v1 for a host-run Ollama — same code
+    # path as "openai", just pointed elsewhere with no key required.
+    llm_provider: Literal["anthropic", "openai", "openai_compatible"] = "anthropic"
     llm_base_url: str = ""
 
     # the sandbox root — see docs/01-architecture.md §1.7. Inside the container this
@@ -62,6 +64,10 @@ class Settings(BaseSettings):
     @property
     def anthropic_api_key(self) -> str:
         return os.environ.get("ANTHROPIC_API_KEY", "")
+
+    @property
+    def openai_api_key(self) -> str:
+        return os.environ.get("OPENAI_API_KEY", "")
 
 
 @lru_cache

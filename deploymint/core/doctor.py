@@ -59,8 +59,11 @@ async def _check_llm() -> dict:
 
     ok, detail = await llm.health()
     provider = get_settings().llm_provider
-    fix = ("set ANTHROPIC_API_KEY" if provider == "anthropic"
-           else "check DEPLOYMINT_LLM_BASE_URL and that the local runtime is reachable")
+    fix = {
+        "anthropic": "set ANTHROPIC_API_KEY",
+        "openai": "set OPENAI_API_KEY",
+        "openai_compatible": "check DEPLOYMINT_LLM_BASE_URL and that the local runtime is up",
+    }[provider]
     return {
         "name": "llm", "status": "pass" if ok else "warn", "detail": detail,
         "fix": "" if ok else f"{fix} — templates still work without it",

@@ -169,9 +169,25 @@ function connectRun(runId, since, initialStatus) {
   };
 }
 
-function renderDepGraph() {
+function renderDepGraph(retriesLeft) {
+  if (retriesLeft === undefined) retriesLeft = 20;
   const el = document.getElementById("depgraph");
-  if (!el || typeof cytoscape === "undefined") return;
+  if (!el) return;
+
+  // cytoscape.min.js is a plain blocking <script src>, so `cytoscape` itself
+  // is reliably defined by the time this runs. What isn't reliable is the
+  // CONTAINER's layout: if this fires before the page's CSS/box layout has
+  // settled, the container can measure 0-width, cytoscape initializes into
+  // that zero-size canvas, and — because it never re-measures on its own —
+  // the graph silently never appears, with no error anywhere. Retry briefly
+  // until the container actually has real dimensions.
+  if (typeof cytoscape === "undefined" || el.getBoundingClientRect().width === 0) {
+    if (retriesLeft > 0) {
+      requestAnimationFrame(() => renderDepGraph(retriesLeft - 1));
+    }
+    return;
+  }
+
   let graph, critical;
   try {
     graph = JSON.parse(el.dataset.graph || "{}");
@@ -185,7 +201,7 @@ function renderDepGraph() {
   const edges = (graph.links || []).map((l, i) => ({
     data: { id: `e${i}`, source: l.source, target: l.target },
   }));
-  cytoscape({
+  const cy = cytoscape({
     container: el,
     elements: [...nodes, ...edges],
     style: [
@@ -200,8 +216,20 @@ function renderDepGraph() {
         "target-arrow-color": "#d0d7de", "target-arrow-shape": "triangle",
         "curve-style": "bezier", width: 1.5 } },
     ],
-    layout: { name: "cose" },
+    // animate: false is the actual fix for the graph rendering nothing on
+    // first page load. The default 'cose' layout animates node positions
+    // over several of its own requestAnimationFrame ticks — on a fresh page
+    // load those ticks can get silently starved before they ever paint
+    // (verified: cytoscape created correctly-sized canvases, but every pixel
+    // stayed transparent — the animation never advanced a single frame).
+    // Calling renderDepGraph() again later worked every time, because by
+    // then the page was idle and RAF ticks ran normally. animate:false
+    // computes final node positions synchronously in one pass instead of
+    // relying on that animation ever getting a chance to run.
+    layout: { name: "cose", animate: false },
   });
+  cy.resize();
+  cy.fit();
 }
 
 function escapeHtml(s) {

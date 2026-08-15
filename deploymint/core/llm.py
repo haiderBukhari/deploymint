@@ -27,14 +27,22 @@ def get_provider() -> Provider:
     silently reusing a stale one."""
     global _provider, _provider_key
     s = get_settings()
-    key = (s.llm_provider, s.model, s.llm_base_url, s.anthropic_api_key)
+    key = (s.llm_provider, s.model, s.llm_base_url, s.anthropic_api_key, s.openai_api_key)
     if _provider is None or _provider_key != key:
-        if s.llm_provider == "openai_compatible":
+        if s.llm_provider in ("openai", "openai_compatible"):
             from deploymint.core.providers.openai_compatible_provider import (
                 OpenAICompatibleProvider,
             )
 
-            _provider = OpenAICompatibleProvider(s.llm_base_url, s.model, s.anthropic_api_key)
+            if s.llm_provider == "openai":
+                # The real API — same chat-completions shape as the local
+                # runtimes "openai_compatible" targets, just a fixed URL and
+                # OPENAI_API_KEY instead of a self-hosted base_url.
+                base_url = s.llm_base_url or "https://api.openai.com/v1"
+                api_key = s.openai_api_key
+            else:
+                base_url, api_key = s.llm_base_url, s.anthropic_api_key
+            _provider = OpenAICompatibleProvider(base_url, s.model, api_key)
         else:
             from deploymint.core.providers.anthropic_provider import AnthropicProvider
 
