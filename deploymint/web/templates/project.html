@@ -19,7 +19,16 @@
   {% if project.analysis.architecture_summary %}
   <p class="muted">{{ project.analysis.architecture_summary }}</p>
   {% endif %}
-  <div id="depgraph" style="height:320px" data-graph='{{ project.analysis.graph | tojson }}'></div>
+  {% if project.analysis.critical_files %}
+  <p>
+    <strong>Most critical files</strong> (ranked by PageRank over the import graph —
+    the more other files depend on one, the higher it ranks):
+    {% for f in project.analysis.critical_files %}<code>{{ f }}</code>{% if not loop.last %}, {% endif %}{% endfor %}
+  </p>
+  {% endif %}
+  <div id="depgraph" style="height:320px"
+       data-graph='{{ project.analysis.graph | tojson }}'
+       data-critical='{{ project.analysis.critical_files | tojson }}'></div>
 </div>
 {% endif %}
 

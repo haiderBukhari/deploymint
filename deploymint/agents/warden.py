@@ -1,12 +1,42 @@
-"""Security Warden: Checkov + OPA gate. See docs/07-phase-3-security.md §3.6."""
+"""Security Warden: Checkov + OPA gate. See docs/07-phase-3-security.md §3.6
+and §4.3b (finding explanations)."""
+
+import asyncio
 
 from deploymint.agents.base import BaseAgent
 from deploymint.agents.state import DeployState
 from deploymint.config import get_settings
-from deploymint.core import scanners
+from deploymint.core import llm, prompts, scanners
 from deploymint.core.artifact_store import write_artifacts
 
 SEVERITY_ORDER = ["critical", "high", "medium", "low", "info"]
+EXPLAIN_SEVERITIES = {"critical", "high"}
+
+
+async def _explain(finding: dict) -> str:
+    """One-sentence plain-language risk explanation for a single finding. Never
+    raises — a failure here just means no explanation, never a blocked run or
+    a crashed agent. Capped to critical/high findings so cost and latency stay
+    small and predictable (see docs/07-phase-3-security.md §4.3b)."""
+    try:
+        return await llm.complete(
+            system="You explain security findings in plain language.",
+            user=prompts.FINDING_EXPLANATION_PROMPT.format(
+                id=finding["id"], message=finding["message"]),
+            max_tokens=100,
+        )
+    except Exception:
+        return ""
+
+
+async def _add_explanations(findings: list[dict]) -> None:
+    targets = [f for f in findings if f["severity"] in EXPLAIN_SEVERITIES]
+    if not targets:
+        return
+    explanations = await asyncio.gather(*(_explain(f) for f in targets))
+    for f, explanation in zip(targets, explanations, strict=True):
+        if explanation:
+            f["explanation"] = explanation.strip()
 
 
 class SecurityWardenAgent(BaseAgent):
@@ -21,6 +51,7 @@ class SecurityWardenAgent(BaseAgent):
         opa_findings, opa_err = await scanners.run_opa(artifacts)
 
         findings = ck_findings + opa_findings
+        await _add_explanations(findings)
         for f in findings:
             await self.emit("warden.finding", **f)
 

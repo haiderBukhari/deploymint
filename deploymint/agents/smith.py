@@ -67,6 +67,7 @@ class ArtifactSmithAgent(BaseAgent):
                 "k8s_service": artifacts.k8s_service,
                 "generated_by": how,
                 "model_used": s.model if how == "llm" else "none",
+                "reasoning": artifacts.reasoning,
             }
         }
         if err and how == "template":

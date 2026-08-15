@@ -12,6 +12,12 @@ function addFinding(f) {
   const li = document.createElement("li");
   li.className = `sev-${f.severity}`;
   li.textContent = `${f.severity} · ${f.id} · ${f.message}`;
+  if (f.explanation) {
+    const div = document.createElement("div");
+    div.className = "explanation";
+    div.textContent = f.explanation;
+    li.appendChild(div);
+  }
   list.appendChild(li);
 }
 
@@ -84,13 +90,16 @@ function connectRun(runId, since) {
 function renderDepGraph() {
   const el = document.getElementById("depgraph");
   if (!el || typeof cytoscape === "undefined") return;
-  let graph;
+  let graph, critical;
   try {
     graph = JSON.parse(el.dataset.graph || "{}");
+    critical = new Set(JSON.parse(el.dataset.critical || "[]"));
   } catch {
     return;
   }
-  const nodes = (graph.nodes || []).map((n) => ({ data: { id: n.id } }));
+  const nodes = (graph.nodes || []).map((n) => ({
+    data: { id: n.id }, classes: critical.has(n.id) ? "critical" : "",
+  }));
   const edges = (graph.links || []).map((l, i) => ({
     data: { id: `e${i}`, source: l.source, target: l.target },
   }));
@@ -100,12 +109,70 @@ function renderDepGraph() {
     style: [
       { selector: "node", style: { label: "data(id)", "font-size": 10,
         "background-color": "#2ee6a6", color: "#e6edf3" } },
+      { selector: "node.critical", style: {
+        "background-color": "#d29922", "border-width": 2, "border-color": "#f0b90b",
+        "font-weight": "bold",
+      } },
       { selector: "edge", style: { "line-color": "#2b3138",
         "target-arrow-color": "#2b3138", "target-arrow-shape": "triangle",
         "curve-style": "bezier" } },
     ],
     layout: { name: "cose" },
   });
+}
+
+function escapeHtml(s) {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+const DOCKER_INSTRUCTIONS = [
+  "FROM", "RUN", "COPY", "ADD", "WORKDIR", "USER", "EXPOSE", "CMD", "ENV",
+  "ARG", "LABEL", "ENTRYPOINT", "VOLUME", "HEALTHCHECK", "STOPSIGNAL", "ONBUILD",
+];
+
+function highlightDockerfile(text) {
+  return escapeHtml(text).split("\n").map((line) => {
+    const m = line.match(/^(\s*)([A-Z]+)(\s|$)/);
+    if (m && DOCKER_INSTRUCTIONS.includes(m[2])) {
+      return `${m[1]}<span class="hl-kw">${m[2]}</span>${line.slice(m[0].length - m[3].length)}`;
+    }
+    if (line.trim().startsWith("#")) return `<span class="hl-comment">${line}</span>`;
+    return line;
+  }).join("\n");
+}
+
+function highlightYaml(text) {
+  return escapeHtml(text).split("\n").map((line) => {
+    if (line.trim().startsWith("#")) return `<span class="hl-comment">${line}</span>`;
+    const m = line.match(/^(\s*(?:- )?)([\w.-]+)(:)/);
+    if (m) {
+      return `${m[1]}<span class="hl-key">${m[2]}</span>${m[3]}${line.slice(m[0].length)}`;
+    }
+    return line;
+  }).join("\n");
+}
+
+async function wireArtifactTabs(runId) {
+  const tabs = document.getElementById("artifact-tabs");
+  const preview = document.getElementById("artifact-preview");
+  if (!tabs || !preview) return;
+
+  async function load(filename) {
+    const r = await fetch(`/api/runs/${runId}/artifacts/${filename}`);
+    const text = r.ok ? await r.text() : "(not generated)";
+    preview.innerHTML = filename.endsWith(".yaml") ? highlightYaml(text) : highlightDockerfile(text);
+  }
+
+  tabs.querySelectorAll(".tab").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      tabs.querySelectorAll(".tab").forEach((b) => b.classList.remove("active"));
+      btn.classList.add("active");
+      load(btn.dataset.file);
+    });
+  });
+
+  const first = tabs.querySelector(".tab");
+  if (first) load(first.dataset.file);
 }
 
 function wireCostForm() {

@@ -29,6 +29,15 @@ def test_project_page_renders(client, registered_project):
     assert registered_project["name"] in r.text
 
 
+def test_project_page_shows_critical_files_after_analysis(client, registered_project):
+    pid = registered_project["id"]
+    client.post(f"/api/projects/{pid}/analyze")
+    r = client.get(f"/projects/{pid}")
+    assert "Most critical files" in r.text
+    assert "db.py" in r.text
+    assert 'data-critical=' in r.text
+
+
 def test_project_page_404s_for_unknown_project(client):
     r = client.get("/projects/999999")
     assert r.status_code == 404
@@ -53,6 +62,24 @@ def test_run_page_renders(client, registered_project):
     r = client.get(f"/runs/{run_id}")
     assert r.status_code == 200
     assert run_id in r.text
+
+
+def test_run_page_has_artifact_tabs_not_bare_links(client, registered_project):
+    import time
+
+    run_id = client.post(
+        f"/api/projects/{registered_project['id']}/runs", json={"skip_deploy": True}
+    ).json()["run_id"]
+    deadline = time.monotonic() + 15
+    while time.monotonic() < deadline:
+        if client.get(f"/api/runs/{run_id}").json()["status"] != "running":
+            break
+        time.sleep(0.1)
+    r = client.get(f"/runs/{run_id}")
+    assert 'id="artifact-tabs"' in r.text
+    assert 'data-file="Dockerfile"' in r.text
+    assert 'id="artifact-preview"' in r.text
+    assert "target=\"_blank\"" not in r.text
 
 
 def test_run_page_404s_for_unknown_run(client):

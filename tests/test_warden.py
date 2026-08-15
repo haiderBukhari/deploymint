@@ -1,3 +1,5 @@
+from unittest.mock import patch
+
 import pytest
 
 from deploymint.agents.warden import SecurityWardenAgent
@@ -43,6 +45,36 @@ async def test_template_output_passes(tmp_path):
          "errors": []}
     )
     assert out["security"]["passed"] is True
+
+
+@pytest.mark.asyncio
+async def test_critical_and_high_findings_get_llm_explanations(tmp_path):
+    """17.3: explanations are generated for critical/high findings only, and
+    never block the run even if the LLM call fails for one of them."""
+    with patch("deploymint.core.llm.complete", return_value="This could let an attacker in."):
+        out = await SecurityWardenAgent().run(
+            {"run_id": "run_bad2", "repo_path": str(tmp_path), "artifacts": BAD, "errors": []}
+        )
+    sec = out["security"]
+    critical_or_high = [f for f in sec["findings"] if f["severity"] in ("critical", "high")]
+    assert critical_or_high
+    for f in critical_or_high:
+        assert f["explanation"] == "This could let an attacker in."
+    low_or_medium = [f for f in sec["findings"] if f["severity"] not in ("critical", "high")]
+    for f in low_or_medium:
+        assert "explanation" not in f
+
+
+@pytest.mark.asyncio
+async def test_explanation_failure_does_not_block_or_crash(tmp_path):
+    from deploymint.core.llm import LLMError
+
+    with patch("deploymint.core.llm.complete", side_effect=LLMError("down")):
+        out = await SecurityWardenAgent().run(
+            {"run_id": "run_bad3", "repo_path": str(tmp_path), "artifacts": BAD, "errors": []}
+        )
+    assert out["security"]["passed"] is False
+    assert out["security"]["blocked_reason"]
 
 
 @pytest.mark.asyncio

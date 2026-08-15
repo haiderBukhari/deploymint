@@ -29,6 +29,7 @@ class Artifacts(TypedDict):
     k8s_service: str
     generated_by: Literal["llm", "template"]
     model_used: str
+    reasoning: NotRequired[str]  # Claude's own explanation; empty on the template path
 
 
 class Finding(TypedDict):

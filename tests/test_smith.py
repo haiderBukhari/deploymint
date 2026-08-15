@@ -70,6 +70,15 @@ async def test_strips_markdown_fences_and_injects_image():
     assert "```" not in out["artifacts"]["dockerfile"]
     # _inject_image must overwrite the model's placeholder tag with the real one
     assert "run_test" in out["artifacts"]["k8s_deployment"]
+    assert out["artifacts"]["reasoning"] == "ok"
+
+
+@pytest.mark.asyncio
+async def test_template_fallback_still_has_a_reasoning_string():
+    with patch("deploymint.core.llm.complete", return_value="I'm sorry, I can't help."):
+        out = await ArtifactSmithAgent().run(dict(BASE))
+    assert out["artifacts"]["generated_by"] == "template"
+    assert out["artifacts"]["reasoning"]
 
 
 @pytest.mark.asyncio
