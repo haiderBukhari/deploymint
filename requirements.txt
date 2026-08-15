@@ -53,6 +53,12 @@ langchain-core>=0.3
 # ---- observability (Oracle) ----
 scikit-learn>=1.5
 
+# ---- cost (FinOps) — always installed so "set AWS credentials" is the whole
+# setup for live Cost Explorer data (docs/17-pending-work.md §17.5); no rebuild
+# with a separate extra. Unused entirely when AWS_ACCESS_KEY_ID isn't set —
+# core/aws_cost.py degrades to the bundled sample export either way. ----
+boto3>=1.34
+
 # ---- NOT listed here, on purpose ----
 #
 # checkov       - invoked as a SUBPROCESS by the Security Warden, never imported
@@ -64,7 +70,6 @@ scikit-learn>=1.5
 #                 installs anything themselves. For local dev: requirements-dev.txt
 #                 does the same two-step dance.
 #
-# boto3         - only for the live AWS Cost Explorer path. Optional extra: [aws]
 # langchain-ollama - Ollama is not part of this architecture. The product is
 #                 online by design; see docs/01-architecture.md §1.1 and §1.9.
 # litellm, chromadb, prophet - not used. See docs/16-decisions-log.md for why

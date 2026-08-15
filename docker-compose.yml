@@ -8,6 +8,11 @@ services:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
       DEPLOYMINT_MODEL: ${DEPLOYMINT_MODEL:-claude-opus-5}
       DEPLOYMINT_KUBE_CONTEXT: ${KUBE_CONTEXT:-}
+      # Optional — live AWS Cost Explorer instead of the bundled sample data.
+      # Blank is fine; see .env.example.
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      AWS_REGION: ${AWS_REGION:-us-east-1}
     volumes:
       - ${DEPLOYMINT_PROJECTS_DIR:-./projects}:/workspace
       - /var/run/docker.sock:/var/run/docker.sock

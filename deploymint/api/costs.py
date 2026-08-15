@@ -1,7 +1,8 @@
 """Cost Q&A. The LLM classifies intent and (optionally) phrases the answer —
-it never computes a number. Every figure in `data` is deterministic: either
-the sample AWS Cost Explorer export, or the sum of local run estimates.
-See docs/10-phase-6-finops-ui.md §6.3."""
+it never computes a number. Every figure in `data` is deterministic: a live
+AWS Cost Explorer connection when credentials are present, the sample export
+otherwise, plus local run estimates layered on top either way.
+See docs/10-phase-6-finops-ui.md §6.3 and docs/17-pending-work.md §17.5."""
 
 import json
 from importlib.resources import files
@@ -9,6 +10,7 @@ from importlib.resources import files
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
+from deploymint.core import aws_cost
 from deploymint.db.database import get_db
 from deploymint.db.models import Run
 
@@ -37,10 +39,16 @@ def _sample_export_by_service() -> dict[str, float]:
 
 
 def load_cost_data(db: Session) -> dict:
-    """Sample AWS Cost Explorer export by default — a real account swaps this
-    for a live `boto3` Cost Explorer call, same shape, no rewrite needed."""
-    by_service = _sample_export_by_service()
-    period = "2026-07-01 to 2026-08-01"
+    """Live AWS Cost Explorer when credentials are present, the bundled sample
+    export otherwise — see core/aws_cost.py for why this never hard-fails."""
+    live = aws_cost.fetch_cost_by_service()
+    if live:
+        by_service, period = live
+        source = "aws_ce"
+    else:
+        by_service = _sample_export_by_service()
+        period = "2026-07-01 to 2026-08-01"
+        source = "sample_json"
 
     local_estimates = (
         db.query(Run).filter(Run.cost.isnot(None)).order_by(Run.created_at.desc()).limit(20).all()
@@ -52,7 +60,7 @@ def load_cost_data(db: Session) -> dict:
             if monthly:
                 by_service[f"DeployMint run {r.id}"] = monthly
 
-    return {"by_service": by_service, "period": period}
+    return {"by_service": by_service, "period": period, "source": source}
 
 
 @router.post("/query")
@@ -62,7 +70,8 @@ async def query_costs(body: dict, db: Session = Depends(get_db)):
     intent = classify_cost_intent(question)
 
     if not data["by_service"]:
-        return {"answer": "No cost data available yet.", "intent": intent, "data": {}}
+        return {"answer": "No cost data available yet.", "intent": intent, "data": {},
+                "source": data["source"]}
 
     total = sum(data["by_service"].values())
 
@@ -89,4 +98,4 @@ async def query_costs(body: dict, db: Session = Depends(get_db)):
         facts = {"total": round(total, 2), "period": data["period"]}
         answer = f"Total spend for {data['period']} was **${total:,.2f}**."
 
-    return {"answer": answer, "intent": intent, "data": facts}
+    return {"answer": answer, "intent": intent, "data": facts, "source": data["source"]}

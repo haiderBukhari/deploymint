@@ -19,6 +19,7 @@ async def run_checks() -> list[dict]:
     checks.append(_check_binary("tmux", warn_only=True))
     checks.append(_check_binary("checkov", warn_only=True))
     checks.append(_check_binary("opa", warn_only=True))
+    checks.append(_check_cost_source())
     return checks
 
 
@@ -85,6 +86,25 @@ def _check_kubeconfig() -> dict:
         "detail": "not mounted — deploys will fall back to `docker run`",
         "fix": "mount ~/.kube/config if you have a cluster",
     }
+
+
+def _check_cost_source() -> dict:
+    from deploymint.core import aws_cost
+
+    if not aws_cost.credentials_present():
+        return {
+            "name": "cost_source", "status": "warn", "detail": "sample data (no AWS credentials)",
+            "fix": "set AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY for live Cost Explorer data",
+        }
+    try:
+        import boto3  # noqa: F401
+    except ImportError:
+        return {
+            "name": "cost_source", "status": "warn",
+            "detail": "sample data (AWS credentials set, but boto3 not installed)",
+            "fix": "pip install 'deploymint[aws]'",
+        }
+    return {"name": "cost_source", "status": "pass", "detail": "live AWS Cost Explorer", "fix": ""}
 
 
 def _check_binary(name: str, warn_only: bool = False) -> dict:
