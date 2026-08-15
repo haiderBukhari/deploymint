@@ -4,16 +4,16 @@
 <h1>Costs</h1>
 
 <div class="card">
-  <h2>Ask a question</h2>
-  <form id="cost-form">
+  <div class="section-label">Ask a question</div>
+  <form id="cost-form" class="form">
     <input type="text" id="cost-question" placeholder="which service costs the most?">
     <button type="submit">Ask</button>
   </form>
-  <p id="cost-answer"></p>
+  <p id="cost-answer" style="margin-bottom:0;"></p>
 </div>
 
 <div class="card">
-  <h2>Breakdown</h2>
+  <div class="section-label">Breakdown</div>
   <table>
     <thead><tr><th>Service</th><th>Amount</th></tr></thead>
     <tbody id="cost-breakdown">

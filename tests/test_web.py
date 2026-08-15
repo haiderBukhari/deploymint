@@ -82,6 +82,62 @@ def test_run_page_has_artifact_tabs_not_bare_links(client, registered_project):
     assert "target=\"_blank\"" not in r.text
 
 
+def test_run_page_passes_its_actual_status_to_connect_run(client, registered_project):
+    """Regression test: connectRun() must know whether the run was ALREADY
+    finished when the page loaded, so a replay of an already-finished run's
+    persisted run.end event doesn't re-trigger the reload-on-completion
+    logic — that reload would reconnect, replay run.end again, reload again,
+    forever. Found by watching a real deploy finish in the browser and
+    seeing the page reload in an infinite loop."""
+    import time
+
+    run_id = client.post(
+        f"/api/projects/{registered_project['id']}/runs", json={"skip_deploy": True}
+    ).json()["run_id"]
+    deadline = time.monotonic() + 30
+    status = "running"
+    while time.monotonic() < deadline:
+        status = client.get(f"/api/runs/{run_id}").json()["status"]
+        if status != "running":
+            break
+        time.sleep(0.1)
+    assert status == "success"
+
+    r = client.get(f"/runs/{run_id}")
+    assert f'connectRun("{run_id}", 0, "{status}")' in r.text
+
+
+def test_run_page_html_lists_each_finding_only_once(client, registered_project):
+    """Guards the server-rendered half of a real duplication bug: run.html
+    renders run.security.findings from the DB once. The other half — app.js
+    appending the SAME findings again from replayed warden.finding/
+    redteam.probe WS events — can only be caught with a real browser JS
+    engine (no headless JS execution in this test suite), so that half was
+    verified manually. See the guard added in app.js's WS message handler:
+    it now skips appending findings via JS when the run was already
+    finished on page load. Found in the browser only after fixing the
+    reload-loop bug (below) stopped hiding it."""
+    import time
+
+    run_id = client.post(
+        f"/api/projects/{registered_project['id']}/runs", json={"skip_deploy": True}
+    ).json()["run_id"]
+    deadline = time.monotonic() + 30
+    run = None
+    while time.monotonic() < deadline:
+        run = client.get(f"/api/runs/{run_id}").json()
+        if run["status"] != "running":
+            break
+        time.sleep(0.1)
+    assert run["status"] == "success"
+    findings = run["security"]["findings"]
+    assert findings  # the clean template output still has non-blocking findings
+
+    r = client.get(f"/runs/{run_id}")
+    first = findings[0]
+    assert r.text.count(first["id"]) == 1
+
+
 def test_run_page_404s_for_unknown_run(client):
     r = client.get("/runs/run_doesnotexist")
     assert r.status_code == 404

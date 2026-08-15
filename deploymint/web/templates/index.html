@@ -2,14 +2,17 @@
 {% block title %}Projects · DeployMint{% endblock %}
 {% block content %}
 <h1>Projects</h1>
+<p class="muted" style="margin-top:-0.5rem;">Register a repo under <code>./projects</code>, then deploy it — Dockerfile, Kubernetes manifests, and the rest of the pipeline, generated automatically.</p>
 
-<form class="card form" method="post" action="/projects/register">
-  <input type="text" name="name" placeholder="project name" required>
-  <input type="text" name="repo_path" placeholder="/workspace/my-app" required>
-  <button type="submit">Register</button>
-</form>
-
-{% if error %}<p class="error">{{ error }}</p>{% endif %}
+<div class="card">
+  <div class="section-label">Register a project</div>
+  <form class="form" method="post" action="/projects/register">
+    <input type="text" name="name" placeholder="project name" required>
+    <input type="text" name="repo_path" placeholder="/workspace/my-app" required>
+    <button type="submit">Register</button>
+  </form>
+  {% if error %}<p class="error" style="margin-bottom:0;">{{ error }}</p>{% endif %}
+</div>
 
 <div class="grid">
   {% for p in projects %}

@@ -5,7 +5,11 @@
 <h1>{{ project.name }}</h1>
 <p class="muted">{{ project.repo_path }}</p>
 
-<div class="card">
+<div class="card" style="display:flex; align-items:center; justify-content:space-between; gap:1rem;">
+  <div>
+    <div class="section-label" style="margin-bottom:0.2rem;">Ready to deploy</div>
+    <p class="muted" style="margin:0;">Runs the full pipeline: analyze → generate → scan → deploy → watch → estimate cost.</p>
+  </div>
   <form method="post" action="/projects/{{ project.id }}/deploy">
     <button type="submit" class="primary">Deploy</button>
   </form>
@@ -13,9 +17,22 @@
 
 {% if project.analysis %}
 <div class="card">
-  <h2>Analysis</h2>
-  <p>{{ project.language }} / {{ project.framework }} — entrypoint <code>{{ project.entrypoint }}</code>,
-     port <code>{{ project.exposed_port }}</code></p>
+  <div class="section-label">Analysis</div>
+  <div class="stat-row">
+    <div class="stat">
+      <div class="stat-value">{{ project.language or "?" }}</div>
+      <div class="stat-label">Language</div>
+    </div>
+    <div class="stat">
+      <div class="stat-value">{{ project.framework or "?" }}</div>
+      <div class="stat-label">Framework</div>
+    </div>
+    <div class="stat">
+      <div class="stat-value">{{ project.exposed_port }}</div>
+      <div class="stat-label">Port</div>
+    </div>
+  </div>
+  <p class="muted">Entrypoint: <code>{{ project.entrypoint }}</code></p>
   {% if project.analysis.architecture_summary %}
   <p class="muted">{{ project.analysis.architecture_summary }}</p>
   {% endif %}
@@ -33,7 +50,7 @@
 {% endif %}
 
 <div class="card">
-  <h2>Run history</h2>
+  <div class="section-label">Run history</div>
   <table>
     <thead><tr><th>Run</th><th>Status</th><th>Trigger</th><th>Started</th></tr></thead>
     <tbody>
