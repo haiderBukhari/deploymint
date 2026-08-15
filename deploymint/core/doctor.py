@@ -58,9 +58,12 @@ async def _check_llm() -> dict:
     from deploymint.core import llm
 
     ok, detail = await llm.health()
+    provider = get_settings().llm_provider
+    fix = ("set ANTHROPIC_API_KEY" if provider == "anthropic"
+           else "check DEPLOYMINT_LLM_BASE_URL and that the local runtime is reachable")
     return {
         "name": "llm", "status": "pass" if ok else "warn", "detail": detail,
-        "fix": "" if ok else "set ANTHROPIC_API_KEY — templates still work without it",
+        "fix": "" if ok else f"{fix} — templates still work without it",
     }
 
 

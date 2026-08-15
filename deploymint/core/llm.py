@@ -1,91 +1,62 @@
-"""Claude client wrapper. See docs/06-phase-2-generation.md §2.2 and
-docs/04-agents-spec.md §4.10 (LLM usage policy)."""
+"""Dispatches to whichever provider Settings.llm_provider selects — the
+public surface here (complete/complete_json/health/extract_json/LLMError/
+LLMUnavailable) is unchanged from before the provider seam existed, so every
+call site (Smith, Red Team, Chat, Oracle, Warden) needed zero changes.
+See docs/06-phase-2-generation.md §2.2, docs/04-agents-spec.md §4.10, and
+docs/17-pending-work.md §17.6."""
 
-import asyncio
 import json
 import re
 
-import anthropic
-
 from deploymint.config import get_settings
+from deploymint.core.providers.base import LLMError, LLMUnavailable, Provider
+
+__all__ = ["LLMError", "LLMUnavailable", "complete", "complete_json",
+           "extract_json", "get_provider", "health"]
 
 FENCE_RE = re.compile(r"```(?:json)?\s*(.*?)```", re.DOTALL)
 
-
-class LLMError(RuntimeError):
-    pass
-
-
-class LLMUnavailable(LLMError):
-    pass
+_provider: Provider | None = None
+_provider_key: tuple | None = None
 
 
-_client: anthropic.Anthropic | None = None
+def get_provider() -> Provider:
+    """Cached by the settings that actually determine provider identity —
+    changing the model/provider/key/base-url via Settings (e.g. in tests, or
+    a live config change) transparently produces a fresh provider instead of
+    silently reusing a stale one."""
+    global _provider, _provider_key
+    s = get_settings()
+    key = (s.llm_provider, s.model, s.llm_base_url, s.anthropic_api_key)
+    if _provider is None or _provider_key != key:
+        if s.llm_provider == "openai_compatible":
+            from deploymint.core.providers.openai_compatible_provider import (
+                OpenAICompatibleProvider,
+            )
 
+            _provider = OpenAICompatibleProvider(s.llm_base_url, s.model, s.anthropic_api_key)
+        else:
+            from deploymint.core.providers.anthropic_provider import AnthropicProvider
 
-def get_client() -> anthropic.Anthropic:
-    global _client
-    if _client is None:
-        s = get_settings()
-        if not s.anthropic_api_key:
-            raise LLMUnavailable("ANTHROPIC_API_KEY is not set")
-        _client = anthropic.Anthropic(api_key=s.anthropic_api_key)
-    return _client
+            _provider = AnthropicProvider(s.anthropic_api_key, s.model)
+        _provider_key = key
+    return _provider
 
 
 async def health() -> tuple[bool, str]:
-    try:
-        client = get_client()
-    except LLMUnavailable as e:
-        return False, str(e)
-    try:
-        await asyncio.to_thread(
-            client.messages.create,
-            model=get_settings().model, max_tokens=8,
-            messages=[{"role": "user", "content": "ok"}],
-        )
-        return True, f"{get_settings().model} reachable"
-    except anthropic.AuthenticationError:
-        return False, "ANTHROPIC_API_KEY is set but invalid"
-    except anthropic.APIConnectionError as e:
-        return False, f"cannot reach the Anthropic API: {e}"
-    except Exception as e:
-        return False, str(e)[:200]
+    return await get_provider().health()
 
 
 async def complete(system: str, user: str, *, max_tokens: int = 4000,
                     temperature: float = 0.1, json_mode: bool = False) -> str:
-    """Single completion. Runs the blocking SDK call in a thread so it never
-    freezes the event loop — see docs/01-architecture.md §1.6."""
+    """Single completion. The provider runs any blocking SDK call in a thread
+    so it never freezes the event loop — see docs/01-architecture.md §1.6."""
     s = get_settings()
-    client = get_client()
-
     sys_prompt = system
     if json_mode:
         sys_prompt += "\n\nReturn ONLY a JSON object. No markdown fences, no prose."
-
-    try:
-        response = await asyncio.wait_for(
-            asyncio.to_thread(
-                client.messages.create,
-                model=s.model, max_tokens=max_tokens, temperature=temperature,
-                system=sys_prompt,
-                messages=[{"role": "user", "content": user}],
-            ),
-            timeout=s.llm_timeout,
-        )
-    except anthropic.RateLimitError as e:
-        raise LLMUnavailable(f"rate limited: {e}") from e
-    except anthropic.APIConnectionError as e:
-        raise LLMUnavailable(f"cannot reach the API: {e}") from e
-    except anthropic.APIStatusError as e:
-        raise LLMError(f"api error {e.status_code}: {e.message}") from e
-    except TimeoutError as e:
-        raise LLMError(f"timed out after {s.llm_timeout}s") from e
-
-    if response.stop_reason == "refusal":
-        raise LLMError("model declined the request")
-    return response.content[0].text
+    return await get_provider().complete_raw(
+        sys_prompt, user, max_tokens=max_tokens, temperature=temperature, timeout=s.llm_timeout)
 
 
 def extract_json(text: str) -> dict:

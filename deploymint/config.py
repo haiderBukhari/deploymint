@@ -3,6 +3,7 @@
 import os
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -24,6 +25,14 @@ class Settings(BaseSettings):
     # standard convention the Anthropic SDK itself uses, matching DATABASE_URL below.
     model: str = "claude-opus-5"
     llm_timeout: int = 120
+
+    # llm provider seam — see docs/17-pending-work.md §17.6. "anthropic" is the
+    # default and only what's been production-tested; "openai_compatible" talks
+    # to any local runtime that speaks the OpenAI chat-completions shape
+    # (Ollama, vLLM, LM Studio), via llm_base_url, e.g.
+    # http://host.docker.internal:11434/v1 for a host-run Ollama.
+    llm_provider: Literal["anthropic", "openai_compatible"] = "anthropic"
+    llm_base_url: str = ""
 
     # the sandbox root — see docs/01-architecture.md §1.7. Inside the container this
     # is always /workspace. Tests override it to a tmp directory.
