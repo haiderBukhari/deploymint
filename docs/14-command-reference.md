@@ -15,9 +15,7 @@ git clone <this-repo> deploymint && cd deploymint
 cp .env.example .env
 ```
 
-Edit `.env`: set `ANTHROPIC_API_KEY` and `DEPLOYMINT_PROJECTS_DIR_HOST` (the absolute
-host path your projects live under — see `08-phase-4-execution.md` §4.1a for why this
-second, host-absolute variable is needed alongside `DEPLOYMINT_PROJECTS_DIR`).
+Edit `.env`: set `ANTHROPIC_API_KEY`.
 
 ```bash
 docker compose up -d
@@ -71,7 +69,6 @@ Distinct codes make DeployMint usable in CI.
 |---|---|---|
 | `ANTHROPIC_API_KEY` | *(required)* | Claude access. Unset → falls back to templates, resilience not offline mode. |
 | `DEPLOYMINT_PROJECTS_DIR` | `./projects` | Host directory bind-mounted to `/workspace` in the app container. |
-| `DEPLOYMINT_PROJECTS_DIR_HOST` | *(required)* | The **absolute** host path `DEPLOYMINT_PROJECTS_DIR` resolves to — needed for Docker-outside-of-Docker builds. |
 | `DEPLOYMINT_PORT` | `8000` | Host port the dashboard is published on. |
 | `DEPLOYMINT_MODEL` | `claude-opus-5` | Override the model. |
 | `KUBE_CONTEXT` | *(blank = current context)* | Which kubeconfig context to deploy into. Blank and unreachable → falls back to `docker run`. |
@@ -463,7 +460,6 @@ docker rm -f deploymint-dev-db
 | Symptom | First thing to check |
 |---|---|
 | `docker compose up` fails immediately | Is Docker Desktop running? Is `ANTHROPIC_API_KEY` set in `.env`? |
-| "no such file or directory" for a file that exists | `DEPLOYMINT_PROJECTS_DIR_HOST` — the host-path translation, `08-phase-4-execution.md` §4.1a |
 | `ErrImagePull` / `ImagePullBackOff` | if using kind: `kind load docker-image` ran? `imagePullPolicy: IfNotPresent`? |
 | `CrashLoopBackOff` | `kubectl logs <pod>` — usually a wrong CMD or a missing dependency |
 | Pod never becomes ready | probe path/port vs. what the app actually serves |

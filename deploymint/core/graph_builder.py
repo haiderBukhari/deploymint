@@ -65,7 +65,9 @@ def build_import_graph(root: Path, files: list[Path], language: str) -> nx.DiGra
     return graph
 
 
-def _resolve_js_relative(spec: str, current_file: Path, root: Path, js_files: list[Path]) -> str | None:
+def _resolve_js_relative(
+    spec: str, current_file: Path, root: Path, js_files: list[Path]
+) -> str | None:
     base = (current_file.parent / spec).resolve()
     for suffix in ("", ".js", ".jsx", ".ts", ".tsx", "/index.js", "/index.ts"):
         candidate = Path(str(base) + suffix)

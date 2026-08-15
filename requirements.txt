@@ -26,9 +26,6 @@ pydantic>=2.7
 pydantic-settings>=2.3
 pyyaml>=6.0
 
-# ---- cli ----
-click>=8.1
-rich>=13.7
 httpx>=0.27
 
 # ---- code analysis (Architect Agent) ----
@@ -60,9 +57,12 @@ scikit-learn>=1.5
 #
 # checkov       - invoked as a SUBPROCESS by the Security Warden, never imported
 #                 (architecture decision #10, docs/01-architecture.md §1.4). Its
-#                 pinned deps would drag the whole tree backwards. Install
-#                 separately:  pip install checkov
-#                 ...or fully isolated:  pipx install checkov
+#                 stale `networkx<2.7` pin makes it unresolvable together with
+#                 networkx>=3.3 above in one pip resolve. The Dockerfile installs
+#                 it as a SEPARATE, ordered pip step (docs/02-repo-layout.md §2.3)
+#                 so it still ships baked into the image — the end user never
+#                 installs anything themselves. For local dev: requirements-dev.txt
+#                 does the same two-step dance.
 #
 # boto3         - only for the live AWS Cost Explorer path. Optional extra: [aws]
 # langchain-ollama - Ollama is not part of this architecture. The product is

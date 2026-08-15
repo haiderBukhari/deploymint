@@ -68,8 +68,9 @@ class FinOpsAgent(BaseAgent):
             if not lim:
                 recs.append(f"'{c.get('name')}': no resource limits — cost is unbounded.")
             if mem > 1.0:
+                savings = mem / 2 * rates["gb_hour"] * HOURS_PER_MONTH
                 recs.append(f"'{c.get('name')}': {mem:.1f} GB memory request. "
-                            f"Halving it saves ~${mem/2 * rates['gb_hour'] * HOURS_PER_MONTH:.2f}/mo.")
+                            f"Halving it saves ~${savings:.2f}/mo.")
 
         if replicas == 1:
             recs.append(f"Single replica — no high availability. "

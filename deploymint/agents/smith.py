@@ -35,12 +35,17 @@ class ArtifactSmithAgent(BaseAgent):
         try:
             artifacts = await self._generate_llm(analysis, project_name, image)
             how = "llm"
-        except llm.LLMUnavailable as e:
-            # The API itself was unreachable — there is no malformed output to
-            # repair (self._last_raw was never set), so go straight to the
-            # template fallback rather than raising a confusing AttributeError.
+        except llm.LLMError as e:
+            # The API call itself failed (network, auth, rate limit, timeout —
+            # anything raised from inside llm.complete()) — there is no raw
+            # output to repair, self._last_raw was never set. Go straight to
+            # the template fallback rather than crashing _repair() on a
+            # missing attribute.
             err = str(e)[:300]
-        except (llm.LLMError, ValidationError, ValueError, KeyError) as e:
+        except (ValidationError, ValueError, KeyError) as e:
+            # The API call succeeded and DID produce output, but it failed our
+            # own schema validation or JSON extraction — this is the case
+            # repair is actually for.
             err = str(e)[:300]
             try:
                 artifacts = await self._repair(analysis, project_name, image, err)
@@ -73,7 +78,9 @@ class ArtifactSmithAgent(BaseAgent):
         )
         return result
 
-    async def _generate_llm(self, analysis: dict, project_name: str, image: str) -> GeneratedArtifacts:
+    async def _generate_llm(
+        self, analysis: dict, project_name: str, image: str
+    ) -> GeneratedArtifacts:
         trimmed = {k: analysis.get(k) for k in TRIM_KEYS}
         trimmed["dependencies"] = (analysis.get("dependencies") or [])[:30]
         trimmed["critical_files"] = (analysis.get("critical_files") or [])[:5]
@@ -92,7 +99,9 @@ class ArtifactSmithAgent(BaseAgent):
         data = llm.extract_json(self._last_raw)
         return GeneratedArtifacts(**data)
 
-    async def _repair(self, analysis: dict, project_name: str, image: str, error: str) -> GeneratedArtifacts:
+    async def _repair(
+        self, analysis: dict, project_name: str, image: str, error: str
+    ) -> GeneratedArtifacts:
         user = prompts.SMITH_REPAIR.format(error=error, previous=self._last_raw[:3000])
         raw = await llm.complete(
             prompts.SMITH_SYSTEM.format(requirements=prompts.HARD_REQUIREMENTS),

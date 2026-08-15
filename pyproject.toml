@@ -23,8 +23,6 @@ dependencies = [
   "python-multipart>=0.0.9",
   "websockets>=12.0",
   "httpx>=0.27",
-  "click>=8.1",
-  "rich>=13.7",
   "pyyaml>=6.0",
   "tree-sitter>=0.22",
   "tree-sitter-language-pack>=0.2",
@@ -37,12 +35,14 @@ dependencies = [
   "scikit-learn>=1.5",
 ]
 
+# checkov is a real dependency of the shipped image (Security Warden invokes it
+# as a subprocess) but is deliberately NOT listed above: its stale `networkx<2.7`
+# pin makes it unresolvable in the same pass as `networkx>=3.3` above. It is
+# installed as a separate, ordered pip step in the Dockerfile instead — see
+# docs/00-prerequisites.md §0.6 and docs/02-repo-layout.md §2.3.
 [project.optional-dependencies]
 aws = ["boto3>=1.34"]
-dev = ["pytest>=8.0", "pytest-asyncio>=0.23", "ruff>=0.5", "mypy>=1.11", "checkov>=3.2.0"]
-
-[project.scripts]
-deploymint = "deploymint.cli:main"
+dev = ["pytest>=8.0", "pytest-asyncio>=0.23", "ruff>=0.5", "mypy>=1.11"]
 
 [tool.setuptools.packages.find]
 include = ["deploymint*"]
@@ -53,7 +53,6 @@ deploymint = [
   "data/*.json",
   "data/*.jsonl",
   "web/templates/*.html",
-  "web/templates/partials/*.html",
   "web/static/*",
   "web/static/vendor/*",
 ]
@@ -64,7 +63,21 @@ target-version = "py311"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "S"]
-ignore = ["S101"]
+ignore = [
+  "S101",  # assert — used throughout tests, and a couple of load-bearing invariants
+  "B008",  # FastAPI's Depends(get_db) in a default arg is the framework's own idiom
+  "S104",  # binding 0.0.0.0 is required — this runs inside a container, not on a host
+  "S110",  # deliberate "log to errors[], never raise" resilience pattern (see base.py)
+  "S112",  # same pattern, in a loop (continue instead of pass)
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests shell out to docker/kubectl/checkov with fixed, hardcoded argv lists —
+# not user-controlled input, so the "untrusted subprocess" rules don't apply.
+"tests/*" = ["S603", "S607", "S108"]
+# Embedded Dockerfile/YAML content as Python string literals — wrapping these
+# fragments would fragment the generated artifact's own readability for no benefit.
+"deploymint/agents/templates.py" = ["E501"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

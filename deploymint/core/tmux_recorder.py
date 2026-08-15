@@ -4,7 +4,7 @@ unavailable — the deploy still works, only replay fidelity is reduced.
 See docs/08-phase-4-execution.md §4.2."""
 
 import shutil
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 
@@ -42,7 +42,7 @@ class TmuxRecorder:
     def _write_header(self) -> None:
         with self.log_path.open("a") as f:
             f.write(f"# DeployMint session {self.run_id}\n")
-            f.write(f"# started {datetime.now(timezone.utc).isoformat()}\n")
+            f.write(f"# started {datetime.now(UTC).isoformat()}\n")
             f.write(f"# tmux: {'yes' if self.available else 'no (degraded capture)'}\n\n")
 
     def log_command(self, argv: list[str]) -> None:
@@ -61,5 +61,5 @@ class TmuxRecorder:
             except Exception:
                 pass
         with self.log_path.open("a") as f:
-            f.write(f"\n# ended {datetime.now(timezone.utc).isoformat()}\n")
+            f.write(f"\n# ended {datetime.now(UTC).isoformat()}\n")
         return str(self.log_path)

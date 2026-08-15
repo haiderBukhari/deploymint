@@ -55,4 +55,4 @@ async def test_fails_closed_when_no_scanner_available(tmp_path, monkeypatch):
     assert sec["passed"] is False
     assert sec["checkov_ran"] is False
     assert sec["opa_ran"] is False
-    assert "no security scanner" in sec["blocked_reason"].lower() or "No security scanner" in sec["blocked_reason"]
+    assert "no security scanner" in sec["blocked_reason"].lower()

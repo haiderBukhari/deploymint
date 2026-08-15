@@ -237,10 +237,7 @@ services:
       DATABASE_URL: postgresql+psycopg://deploymint:deploymint@db:5432/deploymint
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
       DEPLOYMINT_MODEL: ${DEPLOYMINT_MODEL:-claude-opus-5}
-      KUBE_CONTEXT: ${KUBE_CONTEXT:-}
-      # Host-side path DooD builds need to translate a /workspace path back to
-      # something the HOST daemon can resolve — see 08-phase-4-execution.md §4.1a
-      DEPLOYMINT_PROJECTS_DIR_HOST: ${DEPLOYMINT_PROJECTS_DIR_HOST}
+      DEPLOYMINT_KUBE_CONTEXT: ${KUBE_CONTEXT:-}
     volumes:
       - ${DEPLOYMINT_PROJECTS_DIR:-./projects}:/workspace
       - /var/run/docker.sock:/var/run/docker.sock
@@ -289,12 +286,6 @@ ANTHROPIC_API_KEY=
 # Where your own projects live on this machine. Everything under this directory
 # becomes visible inside the app at /workspace/<name>.
 DEPLOYMINT_PROJECTS_DIR=./projects
-
-# The ABSOLUTE host path that DEPLOYMINT_PROJECTS_DIR resolves to. The app builds
-# images via your host's Docker daemon (Docker-outside-of-Docker — see
-# 08-phase-4-execution.md §4.1a) and must pass it a path the HOST can see, not the
-# container's own /workspace view. Compose can't infer this on its own.
-DEPLOYMINT_PROJECTS_DIR_HOST=/absolute/path/to/deploymint/projects
 
 # Port the dashboard is served on
 DEPLOYMINT_PORT=8000

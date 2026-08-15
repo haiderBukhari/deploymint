@@ -46,13 +46,17 @@ translated from the container's `/workspace` view to the host's real filesystem 
 get this wrong and you get a confusing "no such file or directory" for a file that
 demonstrably exists.
 
-**The reality:** this is fully mitigated by architecture — `docker_engine.to_host_path()`
-is one small function, tested once, used everywhere a path crosses that boundary. Budget
-1.5 hours to get it right and verified in Phase 4, not less.
+**The reality, corrected in Phase 7 after real end-to-end testing:** there is no
+host-path boundary to cross at all. `docker build`'s context is always built client-side
+(inside the app container, from its own `/workspace` view) and streamed to the daemon —
+an earlier draft of this risk assumed a translation step (`docker_engine.to_host_path()`)
+that turned out to be unnecessary and, when actually exercised inside the real Compose
+stack rather than a native dev run, actively broke the build. See
+`16-decisions-log.md`'s Phase 7 correction entry.
 
-**Guard:** if a build fails with a path-not-found error and the file is clearly there
-when you `docker compose exec app ls` it, check `DEPLOYMINT_PROJECTS_DIR_HOST` first,
-before anything else.
+**Guard:** if a build ever fails with a path-not-found error, the first thing to check is
+whether something is *still* trying to translate a container path to a host path — that
+function no longer exists in the codebase on purpose.
 
 ### 4. The deploy loop — now with two paths to get right (certain, moderate)
 
@@ -183,7 +187,7 @@ folder. Two hours turns DeployMint from a demo into something someone uses twice
 | A later `pip install` downgrades networkx to satisfy Checkov's pin | medium | `requirements.lock.txt` + a doctor check asserting `networkx>=3.3` | ✅ §0.6 |
 | OPA Rego v0/v1 syntax mismatch | high | version check in doctor; pick one dialect | ✅ 07 §3.1 |
 | tree-sitter grammar compilation fails | medium | `tree-sitter-language-pack` prebuilt binaries | ✅ decision #9 |
-| Docker socket host-path translation bug (§13.1 risk #3) | high | one tested `to_host_path()` function, exercised on Day 1 of Phase 4 | ✅ 08 §4.1a |
+| Docker socket host-path translation bug (§13.1 risk #3) | **occurred, then found not to be needed at all** | the assumed translation was based on an incorrect model of how `docker build` transmits its context; removed once real Compose-stack testing in Phase 7 surfaced it | ✅ 16 §Phase 7 correction |
 | Anthropic API rate limits or latency spikes during the demo | medium | warm-up call in pre-flight; template fallback is always live, not a special mode | ✅ 06 §2.1, 11 §7.4 |
 | Stale pooled Postgres connection after `db` container restarts | medium | `pool_pre_ping=True` on the engine | ✅ 03 §3.2 |
 | kind can't see locally built images | high (only in kind-based dev/demo clusters) | `kind load` + `imagePullPolicy: IfNotPresent`; a real cloud cluster or Docker Desktop K8s doesn't need this step at all | ✅ 08 §4.1b |

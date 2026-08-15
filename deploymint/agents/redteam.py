@@ -90,7 +90,8 @@ class RedTeamAgent(BaseAgent):
         criticals = [f for f in findings if f["severity"] == "critical"]
         if criticals:
             security["passed"] = False
-            security["blocked_reason"] = f"Red Team: [{criticals[0]['id']}] {criticals[0]['message']}"
+            crit = criticals[0]
+            security["blocked_reason"] = f"Red Team: [{crit['id']}] {crit['message']}"
 
         await self.emit("redteam.done", findings_count=len(findings))
         return {"security": security}

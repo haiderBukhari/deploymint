@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
@@ -65,7 +65,7 @@ async def analyze(project_id: int, db: Session = Depends(get_db)):
     p.framework = analysis["framework"]
     p.entrypoint = analysis["entrypoint"]
     p.exposed_port = analysis["exposed_port"]
-    p.last_analyzed_at = datetime.now(timezone.utc)
+    p.last_analyzed_at = datetime.now(UTC)
     db.commit()
     return analysis
 

@@ -2,7 +2,7 @@
 docs/09-phase-5-orchestration.md §5.3 (per-client queues for multi-tab support)."""
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 
@@ -37,7 +37,7 @@ class EventBus:
             "seq": self.seq,
             "type": type_,
             "payload": payload or {},
-            "ts": datetime.now(timezone.utc).isoformat(),
+            "ts": datetime.now(UTC).isoformat(),
         }
         for sink in self._sinks:
             try:

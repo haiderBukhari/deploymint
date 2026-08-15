@@ -45,49 +45,28 @@ container rather than running Docker-in-Docker. It is well-understood and it is 
 why `01-architecture.md` §1.7 calls the socket mount "root-equivalent host access" and
 asks you to say that plainly rather than hand-wave it.
 
-**One consequence worth internalizing now:** the build *context* (the directory
-`docker build` reads from) must be a path the **host's** daemon can see — which, because
-of the socket mount, means it must be a path that exists on the host's filesystem, not
-just inside the app container. In practice this is automatically true here: the user's
-project lives under `./projects` on the host, bind-mounted into the app container at
-`/workspace`. When the app container passes `/workspace/my-app` as the build context to
-the host daemon, the **host** daemon does not know about `/workspace` — it needs the
-*host* path. Handle this by having the app read `DEPLOYMINT_PROJECTS_DIR` (the same env
-var used in `docker-compose.yml`) and translate `/workspace/my-app` back to
-`{DEPLOYMINT_PROJECTS_DIR}/my-app` before calling `docker build`:
+**A consequence worth internalizing, verified for real in Phase 7 — and it is the
+*opposite* of what an earlier draft of this doc assumed:** no host-path translation is
+needed at all. `docker build` — whether invoked via the CLI or the Python SDK — always
+builds its context tar on the **client** side, i.e. wherever the `docker build` call
+itself is running, and streams those bytes over whatever transport reaches the daemon
+(a local socket or a mounted one, identically). The daemon on the other end never
+resolves the context path against its own filesystem; it just receives a tarball. Since
+the app container *is* the client here, "client-side" means the container's own
+`/workspace/<name>` view — exactly the path DeployMint already has, no translation
+required.
 
-```python
-# deploymint/core/docker_engine.py (addition)
-import os
-from pathlib import Path
-
-
-def to_host_path(container_path: str) -> str:
-    """The Docker SDK talks to the HOST daemon via the socket mount, so any path
-    passed as a build context must be a path the host can resolve — not the
-    container's own /workspace view of it."""
-    workspace_root = Path("/workspace")
-    host_root = Path(os.environ["DEPLOYMINT_PROJECTS_DIR_HOST"])  # see below
-    rel = Path(container_path).relative_to(workspace_root)
-    return str(host_root / rel)
-```
-
-`DEPLOYMINT_PROJECTS_DIR_HOST` is a second env var, distinct from
-`DEPLOYMINT_PROJECTS_DIR` — the *host's* absolute path to the projects directory, which
-Compose can't infer on the container's behalf. Add it to `.env.example`
-(`02-repo-layout.md` §2.5):
-
-```bash
-# The ABSOLUTE path on your host machine that DEPLOYMINT_PROJECTS_DIR resolves to.
-# Required because the app builds images via your host's Docker daemon (see
-# 08-phase-4-execution.md §4.1a) and must pass it a path the host can see.
-DEPLOYMINT_PROJECTS_DIR_HOST=/Users/you/deploymint/projects
-```
-
-This is a real, slightly unusual wrinkle of the Docker-outside-of-Docker pattern —
-document it clearly rather than letting a future contributor discover it via a confusing
-`docker build` "no such file or directory" error where the file very much exists, just
-not where the host daemon is looking.
+Verified directly against the shipped image: `docker build -f
+.deploymint/<run_id>/Dockerfile .` run from inside the running `app` container, over the
+mounted host socket, succeeds using the unmodified container-local path — and the
+resulting image shows up in `docker images` **on the host**, confirming the build isn't
+trapped in a nested daemon either. An earlier draft here introduced a
+`DEPLOYMINT_PROJECTS_DIR_HOST` env var and a `to_host_path()` translation function based
+on a plausible-sounding but incorrect mental model of how the build context is
+transmitted; both were removed once real end-to-end testing (bringing up the actual
+Compose stack, not just running the app natively on the host) surfaced the bug. See
+`16-decisions-log.md`'s Phase 7 correction entry for the full story of how this was
+caught.
 
 ---
 
@@ -394,14 +373,14 @@ Watch it report `broken_at_seq: 3`. **This takes 15 seconds and is genuinely con
 
 ## Step 4.5 — Docker build with streaming
 
-Use the Docker SDK's low-level API so you get log lines as they happen. **The only
-change from a purely local design is the host-path translation from §4.1a** — the
-build/streaming mechanics themselves are identical whether `docker.from_env()` is
-talking to a local daemon directly or to one via a mounted socket.
+Use the Docker SDK's low-level API so you get log lines as they happen. **No host-path
+translation is needed** (see §4.1a's correction) — the build/streaming mechanics are
+identical whether `docker.from_env()` is talking to a local daemon directly or to one via
+a mounted socket, because the context tar is always built client-side either way.
 
 ```python
 # deploymint/core/docker_engine.py
-import asyncio, json, os
+import asyncio
 from pathlib import Path
 import docker
 from docker.errors import BuildError, APIError, DockerException
@@ -419,18 +398,11 @@ def get_client():
         ) from e
 
 
-def to_host_path(container_path: str) -> str:
-    """See 08-phase-4-execution.md §4.1a — build contexts must be host-visible paths."""
-    workspace_root = Path("/workspace")
-    host_root = Path(os.environ["DEPLOYMINT_PROJECTS_DIR_HOST"])
-    rel = Path(container_path).relative_to(workspace_root)
-    return str(host_root / rel)
-
-
 def _build_sync(context: str, dockerfile: str, tag: str, line_cb):
     client = get_client()
+    dockerfile_rel = str(Path(dockerfile).relative_to(Path(context)))
     stream = client.api.build(
-        path=to_host_path(context), dockerfile=dockerfile, tag=tag,
+        path=context, dockerfile=dockerfile_rel, tag=tag,
         rm=True, forcerm=True, decode=True, nocache=False, pull=False,
     )
     error = None

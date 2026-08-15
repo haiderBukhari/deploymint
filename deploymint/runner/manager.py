@@ -3,7 +3,7 @@
 import asyncio
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from deploymint.agents.graph import build_graph
 from deploymint.core.events import registry
@@ -96,7 +96,7 @@ async def _execute(run_id, project_id, name, repo_path, force, skip_deploy, bus)
                     "errors": final.get("errors", []),
                     "model_used": (final.get("artifacts") or {}).get("model_used"),
                     "duration_ms": ms,
-                    "completed_at": datetime.now(timezone.utc),
+                    "completed_at": datetime.now(UTC),
                 })
                 db.commit()
             await bus.emit("run.end", {"status": status, "duration_ms": ms})

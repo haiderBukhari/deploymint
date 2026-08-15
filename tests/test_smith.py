@@ -37,6 +37,23 @@ async def test_falls_back_when_api_is_unreachable():
 
 
 @pytest.mark.asyncio
+async def test_auth_error_falls_back_without_crashing_repair():
+    """Regression test: an LLMError that is NOT LLMUnavailable (e.g. a real
+    401 invalid-API-key response, wrapped by llm.complete as plain LLMError)
+    must not attempt repair — self._last_raw was never set because the API
+    call itself failed, so repair would crash with AttributeError. Found by
+    actually running the shipped Docker Compose stack with a key that turned
+    out to be invalid."""
+    from deploymint.core.llm import LLMError
+
+    with patch("deploymint.core.llm.complete", side_effect=LLMError("api error 401: invalid")):
+        out = await ArtifactSmithAgent().run(dict(BASE))
+    assert out["artifacts"]["generated_by"] == "template"
+    assert out["artifacts"]["dockerfile"]
+    assert "repair failed" not in out["errors"][-1]
+
+
+@pytest.mark.asyncio
 async def test_strips_markdown_fences_and_injects_image():
     fenced = (
         '```json\n{"dockerfile":"FROM python:3.11-slim\\nUSER 10001\\n'

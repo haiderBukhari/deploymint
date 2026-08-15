@@ -1,6 +1,5 @@
 import pytest
 
-from deploymint.config import get_settings
 from deploymint.core.sandbox import SandboxError, safe_join, validate_repo_path
 
 

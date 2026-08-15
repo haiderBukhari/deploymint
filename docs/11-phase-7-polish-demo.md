@@ -26,7 +26,7 @@ git clone . /tmp/dm-clean && cd /tmp/dm-clean
 ```
 
 ```bash
-cp .env.example .env && echo "ANTHROPIC_API_KEY=sk-ant-..." >> .env && echo "DEPLOYMINT_PROJECTS_DIR_HOST=$(pwd)/projects" >> .env
+cp .env.example .env && echo "ANTHROPIC_API_KEY=sk-ant-..." >> .env
 ```
 
 ```bash

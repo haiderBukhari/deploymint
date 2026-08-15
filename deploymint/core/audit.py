@@ -3,7 +3,7 @@ one so tampering with a row is detectable. See docs/08-phase-4-execution.md §4.
 
 import hashlib
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from deploymint.db.database import get_session_factory
 from deploymint.db.models import AuditLog
@@ -28,7 +28,7 @@ class AuditChain:
     async def record(self, *, agent: str, action: str, command: str,
                      output: str = "", exit_code: int | None = None) -> str:
         self.seq += 1
-        ts = datetime.now(timezone.utc)
+        ts = datetime.now(UTC)
         payload = _payload(self.prev_hash, self.run_id, self.seq, agent, action,
                            command, output, exit_code, ts.isoformat())
         h = hashlib.sha256(payload.encode()).hexdigest()

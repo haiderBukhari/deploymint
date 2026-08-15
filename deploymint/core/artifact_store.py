@@ -1,7 +1,7 @@
 """Writes generated artifacts to disk for scanning. See docs/07-phase-3-security.md §3.2."""
 
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 FILENAMES = {
@@ -25,6 +25,6 @@ def write_artifacts(run_id: str, repo_path: str, artifacts: dict) -> Path:
         "run_id": run_id,
         "generated_by": artifacts.get("generated_by"),
         "model_used": artifacts.get("model_used"),
-        "written_at": datetime.now(timezone.utc).isoformat(),
+        "written_at": datetime.now(UTC).isoformat(),
     }, indent=2))
     return d

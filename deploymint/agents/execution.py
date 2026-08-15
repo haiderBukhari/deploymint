@@ -82,10 +82,11 @@ class ExecutionEngineAgent(BaseAgent):
                 if not r.ok:
                     raise RuntimeError(f"docker run failed: {r.combined[:400]}")
                 dep["container_id"] = r.stdout.strip()[:12]
-                dep["local_url"] = f"http://localhost:{port}"
+                host_port = await docker_run.published_port(name, port, **kw)
+                dep["local_url"] = f"http://localhost:{host_port or port}"
 
                 for _ in range(15):
-                    if await docker_run.container_healthy(name, port, **kw):
+                    if await docker_run.container_healthy(name, **kw):
                         break
                     await asyncio.sleep(2)
                 else:

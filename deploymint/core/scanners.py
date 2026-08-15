@@ -44,7 +44,7 @@ async def run_checkov(directory: Path) -> tuple[list[dict], str | None]:
     )
     try:
         out, err = await asyncio.wait_for(proc.communicate(), timeout=120)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         proc.kill()
         return [], "checkov timed out after 120s"
 
@@ -81,8 +81,8 @@ def policies_dir() -> Path:
 def dockerfile_to_opa_input(content: str) -> dict:
     return {
         "kind": "dockerfile",
-        "lines": [l.rstrip() for l in content.splitlines()
-                  if l.strip() and not l.strip().startswith("#")],
+        "lines": [line.rstrip() for line in content.splitlines()
+                  if line.strip() and not line.strip().startswith("#")],
         "content": content,
     }
 

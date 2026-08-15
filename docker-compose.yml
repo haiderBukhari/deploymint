@@ -1,0 +1,36 @@
+services:
+  app:
+    build: .
+    ports:
+      - "127.0.0.1:${DEPLOYMINT_PORT:-8000}:8000"
+    environment:
+      DATABASE_URL: postgresql+psycopg://deploymint:deploymint@db:5432/deploymint
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      DEPLOYMINT_MODEL: ${DEPLOYMINT_MODEL:-claude-opus-5}
+      DEPLOYMINT_KUBE_CONTEXT: ${KUBE_CONTEXT:-}
+    volumes:
+      - ${DEPLOYMINT_PROJECTS_DIR:-./projects}:/workspace
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ${HOME}/.kube/config:/root/.kube/config:ro
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: deploymint
+      POSTGRES_PASSWORD: deploymint
+      POSTGRES_DB: deploymint
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U deploymint"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+volumes:
+  pgdata:

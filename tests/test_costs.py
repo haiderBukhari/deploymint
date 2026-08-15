@@ -15,7 +15,7 @@ def test_by_service_breakdown_sums_match_answer(client):
     r = client.post("/api/costs/query", json={"question": "give me a breakdown by service"})
     body = r.json()
     assert body["intent"] == "by_service"
-    for svc, amount in body["data"]["by_service"].items():
+    for _svc, amount in body["data"]["by_service"].items():
         assert f"${amount:,.2f}" in body["answer"]
 
 

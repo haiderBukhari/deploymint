@@ -58,7 +58,7 @@ async def run_command(
             timeout=timeout,
         )
         await proc.wait()
-    except asyncio.TimeoutError:
+    except TimeoutError:
         proc.kill()
         err_lines.append(f"TIMEOUT after {timeout}s")
 

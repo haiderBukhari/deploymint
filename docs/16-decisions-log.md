@@ -110,3 +110,38 @@ If a future revision considers a hosted tier (the roadmap in `11-phase-7-polish-
 as an opt-in**, not a replacement for Shape 4. The local Docker Compose product should
 keep working exactly as documented here regardless of whether a hosted tier ever exists
 alongside it.
+
+---
+
+## Correction (Phase 7): the host-path translation in §4.1a was never real
+
+`08-phase-4-execution.md` §4.1a asserted that `docker build`'s context path must be
+translated from the container's `/workspace/<name>` view to a HOST-visible path
+(`DEPLOYMINT_PROJECTS_DIR_HOST`) before being passed to the Docker SDK, because "the
+build context ... must be a path the host's daemon can see." This is wrong, and it was
+only caught by actually building the shipped image, bringing up the real Compose stack,
+and running a deploy through it end to end — every earlier phase's testing ran the app
+natively on the host, where the translation was a no-op and the bug had nowhere to hide.
+
+**What actually happens:** `docker build` — via the CLI or the Python SDK — always
+constructs its build-context tar on the **client** side (wherever the `docker` process
+or library call is actually running) and streams those bytes over whatever transport
+connects to the daemon, socket or otherwise. The daemon never resolves the context path
+against its own filesystem; it just receives a tarball. Since our app container is the
+client here, "client-side" means the container's own view of the bind-mounted
+`/workspace` directory — which is exactly the path DeployMint already has. Translating
+it to a host path that the *container* cannot see produces `unable to prepare context:
+... no such file or directory`, which is exactly the failure this surfaced as.
+
+Verified directly: `docker build -f .deploymint/<run_id>/Dockerfile .` run from inside
+the app container, against the mounted host socket, succeeds using the unmodified
+container-local path — and the resulting image shows up in `docker images` **on the
+host**, confirming the build isn't trapped in a nested daemon either.
+
+**Fix:** `deploymint/core/docker_engine.py`'s `to_host_path()` and the
+`DEPLOYMINT_PROJECTS_DIR_HOST` env var (docker-compose.yml, `.env.example`) were removed
+entirely — nothing in the codebase needed a host-resolved path anywhere else (`docker
+run`, `kind load docker-image`, and `kubectl apply` all operate on image names/tags or
+in-cluster resources, never host filesystem paths). Docker-outside-of-Docker itself is
+still real and still the right pattern — only the "translate the path" part of the
+original mental model was incorrect.
