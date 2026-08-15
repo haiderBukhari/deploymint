@@ -31,6 +31,10 @@
       <div class="stat-value">{{ project.exposed_port }}</div>
       <div class="stat-label">Port</div>
     </div>
+    <div class="stat">
+      <div class="stat-value">{{ project.cloud_provider|upper }}</div>
+      <div class="stat-label">Terraform target</div>
+    </div>
   </div>
   <p class="muted">Entrypoint: <code>{{ project.entrypoint }}</code></p>
   {% if project.analysis.architecture_summary %}

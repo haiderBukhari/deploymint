@@ -87,6 +87,7 @@ class DeployState(TypedDict):
     project_name: str
     repo_path: str
     force: bool
+    cloud_provider: NotRequired[str]  # aws | gcp | azure — which Terraform module Smith generates
 
     # --- agent outputs (each node writes exactly one key) ---
     analysis: NotRequired[RepoAnalysis]

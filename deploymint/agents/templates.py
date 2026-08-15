@@ -285,7 +285,21 @@ def render(analysis: dict, project_name: str, image: str) -> GeneratedArtifacts:
 # ---------------------------------------------------------------------------
 
 
-def render_terraform(name: str, image: str, port: int) -> str:
+def render_terraform(name: str, image: str, port: int, cloud: str = "aws") -> str:
+    """Managed cloud cluster support (docs/19-managed-clusters.md): Terraform
+    generation only — DeployMint never touches cloud credentials directly.
+    The user runs `terraform apply` themselves with whatever AWS/GCP/Azure
+    CLI auth they already have configured. `cloud` selects which provider's
+    registry + optional managed cluster module gets generated; unrecognized
+    values fall back to AWS."""
+    if cloud == "gcp":
+        return _render_terraform_gcp(name, port)
+    if cloud == "azure":
+        return _render_terraform_azure(name, port)
+    return _render_terraform_aws(name, port)
+
+
+def _render_terraform_aws(name: str, port: int) -> str:
     ecr_repo = name.replace("_", "-")
     return f"""\
 terraform {{
@@ -368,6 +382,153 @@ output "ecr_repository_url" {{
 
 output "cluster_name" {{
   value = var.create_cluster ? module.eks[0].cluster_name : null
+}}
+"""
+
+
+def _render_terraform_gcp(name: str, port: int) -> str:
+    repo = name.replace("_", "-")
+    return f"""\
+terraform {{
+  required_version = ">= 1.5"
+  required_providers {{
+    google = {{
+      source  = "hashicorp/google"
+      version = "~> 5.0"
+    }}
+  }}
+}}
+
+variable "gcp_project" {{
+  description = "GCP project ID to deploy into."
+  type        = string
+}}
+
+variable "gcp_region" {{
+  description = "GCP region for the registry and cluster."
+  type        = string
+  default     = "us-central1"
+}}
+
+# GKE costs real money and takes several minutes to provision — opt in
+# explicitly rather than creating a cluster by default.
+variable "create_cluster" {{
+  description = "Provision a new GKE cluster. Leave false to just get the Artifact Registry repo and push into an existing cluster."
+  type        = bool
+  default     = false
+}}
+
+provider "google" {{
+  project = var.gcp_project
+  region  = var.gcp_region
+}}
+
+resource "google_artifact_registry_repository" "{repo}" {{
+  location      = var.gcp_region
+  repository_id = "{repo}"
+  format        = "DOCKER"
+}}
+
+resource "google_container_cluster" "{repo}" {{
+  count    = var.create_cluster ? 1 : 0
+  name     = "{repo}-cluster"
+  location = var.gcp_region
+
+  remove_default_node_pool = true
+  initial_node_count       = 1
+}}
+
+resource "google_container_node_pool" "{repo}" {{
+  count      = var.create_cluster ? 1 : 0
+  name       = "{repo}-pool"
+  location   = var.gcp_region
+  cluster    = google_container_cluster.{repo}[0].name
+  node_count = {2 if port else 1}
+
+  node_config {{
+    machine_type = "e2-medium"
+  }}
+}}
+
+output "artifact_registry_url" {{
+  value = "${{var.gcp_region}}-docker.pkg.dev/${{var.gcp_project}}/{repo}"
+}}
+
+output "cluster_name" {{
+  value = var.create_cluster ? google_container_cluster.{repo}[0].name : null
+}}
+"""
+
+
+def _render_terraform_azure(name: str, port: int) -> str:
+    resource_name = name.replace("-", "").replace("_", "")
+    display = name.replace("_", "-")
+    return f"""\
+terraform {{
+  required_version = ">= 1.5"
+  required_providers {{
+    azurerm = {{
+      source  = "hashicorp/azurerm"
+      version = "~> 3.0"
+    }}
+  }}
+}}
+
+variable "azure_location" {{
+  description = "Azure region to deploy into."
+  type        = string
+  default     = "eastus"
+}}
+
+# AKS costs real money and takes several minutes to provision — opt in
+# explicitly rather than creating a cluster by default.
+variable "create_cluster" {{
+  description = "Provision a new AKS cluster. Leave false to just get the ACR registry and push into an existing cluster."
+  type        = bool
+  default     = false
+}}
+
+provider "azurerm" {{
+  features {{}}
+}}
+
+resource "azurerm_resource_group" "{resource_name}" {{
+  name     = "{display}-rg"
+  location = var.azure_location
+}}
+
+resource "azurerm_container_registry" "{resource_name}" {{
+  name                = "{resource_name}acr"
+  resource_group_name = azurerm_resource_group.{resource_name}.name
+  location            = azurerm_resource_group.{resource_name}.location
+  sku                 = "Basic"
+  admin_enabled       = true
+}}
+
+resource "azurerm_kubernetes_cluster" "{resource_name}" {{
+  count               = var.create_cluster ? 1 : 0
+  name                = "{display}-aks"
+  resource_group_name = azurerm_resource_group.{resource_name}.name
+  location            = azurerm_resource_group.{resource_name}.location
+  dns_prefix          = "{resource_name}"
+
+  default_node_pool {{
+    name       = "default"
+    node_count = {2 if port else 1}
+    vm_size    = "Standard_B2s"
+  }}
+
+  identity {{
+    type = "SystemAssigned"
+  }}
+}}
+
+output "acr_login_server" {{
+  value = azurerm_container_registry.{resource_name}.login_server
+}}
+
+output "cluster_name" {{
+  value = var.create_cluster ? azurerm_kubernetes_cluster.{resource_name}[0].name : null
 }}
 """
 
@@ -558,13 +719,16 @@ def render_grafana_dashboard(name: str) -> str:
     return json.dumps(dashboard, indent=2)
 
 
-def render_extra_artifacts(analysis: dict, name: str, image: str, run_id: str) -> dict:
+def render_extra_artifacts(
+    analysis: dict, name: str, image: str, run_id: str, cloud: str = "aws"
+) -> dict:
     """Always generated, regardless of whether the Dockerfile/K8s path used
     the LLM or the template fallback — see the module docstring above for why
-    these stay deterministic."""
+    these stay deterministic. `cloud` picks the Terraform target
+    (docs/19-managed-clusters.md); everything else is cloud-agnostic."""
     port = analysis.get("exposed_port", 8000)
     return {
-        "terraform": render_terraform(name, image, port),
+        "terraform": render_terraform(name, image, port, cloud),
         "ansible_playbook": render_ansible(name, image, port),
         "argocd_application": render_argocd(name, run_id),
         "github_actions_workflow": render_github_actions(name, port),

@@ -22,7 +22,7 @@ def create_project(body: ProjectCreate, db: Session = Depends(get_db)):
     if db.query(Project).filter_by(name=body.name).first():
         raise HTTPException(409, f"project '{body.name}' already exists")
 
-    p = Project(name=body.name, repo_path=str(path))
+    p = Project(name=body.name, repo_path=str(path), cloud_provider=body.cloud_provider)
     db.add(p)
     db.commit()
     db.refresh(p)

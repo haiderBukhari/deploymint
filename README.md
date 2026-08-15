@@ -46,7 +46,7 @@ pod, in about a minute.
 | Local LLM support (Ollama/vLLM/LM Studio, OpenAI-compatible) as an alternative to Claude | ✅ working |
 | Terraform / Ansible / ArgoCD / GitHub Actions generation | ✅ working (deterministic templates, always generated) |
 | Prometheus ServiceMonitor / Grafana dashboard generation | ✅ working (deterministic templates, always generated) |
-| Managed cloud clusters (EKS/GKE/AKS) via a connected account, not just a local kubeconfig | 🚧 planned |
+| Managed cloud cluster support — AWS/GCP/Azure Terraform (ECR+EKS, Artifact Registry+GKE, ACR+AKS) | ✅ working (Terraform-only — you run `terraform apply`, DeployMint never touches cloud credentials) |
 
 ## Requirements
 
@@ -127,6 +127,7 @@ reviewer can see exactly why the codebase looks the way it does.
 | 16 | [16-decisions-log.md](docs/16-decisions-log.md) | The full round trip — every direction this project considered and why it landed here |
 | 17 | [17-pending-work.md](docs/17-pending-work.md) | Post-Phase-7 gap analysis vs. the original proposal — all items done, kept as a record |
 | 18 | [18-iac-generation.md](docs/18-iac-generation.md) | Terraform/Ansible/ArgoCD/GitHub Actions/Prometheus/Grafana generation — why it's deterministic, never LLM-generated |
+| 19 | [19-managed-clusters.md](docs/19-managed-clusters.md) | Multi-cloud Terraform (AWS/GCP/Azure) — why it's generation-only, DeployMint never touches cloud credentials |
 
 ---
 

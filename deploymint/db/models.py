@@ -25,6 +25,9 @@ class Project(Base):
     framework: Mapped[str | None] = mapped_column(String(50))
     entrypoint: Mapped[str | None] = mapped_column(String(255))
     exposed_port: Mapped[int] = mapped_column(Integer, default=8000)
+    # aws | gcp | azure — which cloud's Terraform module (ECR/EKS, Artifact
+    # Registry/GKE, ACR/AKS) gets generated. See docs/19-managed-clusters.md.
+    cloud_provider: Mapped[str] = mapped_column(String(20), default="aws")
     analysis: Mapped[dict | None] = mapped_column(JSONB)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     last_analyzed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

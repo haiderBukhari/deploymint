@@ -9,7 +9,7 @@ import pytest
 import yaml
 
 from deploymint.agents.smith import ArtifactSmithAgent
-from deploymint.agents.templates import render_extra_artifacts
+from deploymint.agents.templates import render_extra_artifacts, render_terraform
 
 ANALYSIS = {
     "language": "python", "framework": "fastapi", "package_manager": "pip",
@@ -93,3 +93,62 @@ async def test_smith_always_includes_extra_artifacts_on_the_template_path():
     for key in ("terraform", "ansible_playbook", "argocd_application",
                 "github_actions_workflow", "prometheus_servicemonitor", "grafana_dashboard"):
         assert art[key].strip()
+
+
+# --- Managed cloud cluster support (docs/19-managed-clusters.md) ---
+# Terraform-only: DeployMint generates the module, the user runs
+# `terraform apply` themselves with their own cloud credentials already
+# configured. DeployMint never stores or transmits a cloud credential.
+
+def test_terraform_defaults_to_aws():
+    assert "aws_ecr_repository" in render_terraform("my-app", "img", 8000)
+
+
+def test_terraform_gcp_has_artifact_registry_and_optional_gke():
+    tf = render_terraform("my-app", "img", 8000, cloud="gcp")
+    assert "google_artifact_registry_repository" in tf
+    assert "google_container_cluster" in tf
+    assert 'variable "create_cluster"' in tf
+    assert "default     = false" in tf  # GKE opt-in, not default-on
+
+
+def test_terraform_azure_has_acr_and_optional_aks():
+    tf = render_terraform("my-app", "img", 8000, cloud="azure")
+    assert "azurerm_container_registry" in tf
+    assert "azurerm_kubernetes_cluster" in tf
+    assert 'variable "create_cluster"' in tf
+    assert "default     = false" in tf  # AKS opt-in, not default-on
+
+
+def test_terraform_unknown_cloud_falls_back_to_aws():
+    assert "aws_ecr_repository" in render_terraform("my-app", "img", 8000, cloud="oracle")
+
+
+@pytest.mark.parametrize("cloud", ["aws", "gcp", "azure"])
+def test_terraform_brace_balance_for_every_cloud(cloud):
+    """Crude HCL sanity check — same one used for the AWS-only test before
+    multi-cloud support existed."""
+    tf = render_terraform("my-app", "img", 8000, cloud=cloud)
+    assert tf.count("{") == tf.count("}")
+
+
+@pytest.mark.asyncio
+async def test_smith_generates_the_projects_own_cloud_target():
+    out = await ArtifactSmithAgent().run(
+        {"run_id": "run_smith2", "project_id": 1, "project_name": "t",
+         "repo_path": "/workspace/t", "force": False, "errors": [], "current_node": "",
+         "analysis": ANALYSIS, "cloud_provider": "gcp"}
+    )
+    assert "google_artifact_registry_repository" in out["artifacts"]["terraform"]
+
+
+@pytest.mark.asyncio
+async def test_smith_defaults_to_aws_when_cloud_provider_is_absent():
+    """Old runs / any state dict built before this feature existed won't
+    have cloud_provider at all — must not crash, must default to aws."""
+    out = await ArtifactSmithAgent().run(
+        {"run_id": "run_smith3", "project_id": 1, "project_name": "t",
+         "repo_path": "/workspace/t", "force": False, "errors": [], "current_node": "",
+         "analysis": ANALYSIS}
+    )
+    assert "aws_ecr_repository" in out["artifacts"]["terraform"]

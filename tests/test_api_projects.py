@@ -12,6 +12,17 @@ def test_register_analyze_flow(client, sample_repo):
     assert len(data["graph"]["nodes"]) >= 4
 
 
+def test_cloud_provider_defaults_to_aws_and_is_settable(client, sample_repo):
+    r = client.post("/api/projects", json={"name": "cloud-default", "repo_path": str(sample_repo)})
+    assert r.json()["cloud_provider"] == "aws"
+
+    r2 = client.post("/api/projects", json={
+        "name": "cloud-gcp", "repo_path": str(sample_repo), "cloud_provider": "gcp",
+    })
+    assert r2.status_code == 201
+    assert r2.json()["cloud_provider"] == "gcp"
+
+
 def test_duplicate_name_conflicts(client, sample_repo):
     body = {"name": "dup", "repo_path": str(sample_repo)}
     assert client.post("/api/projects", json=body).status_code == 201

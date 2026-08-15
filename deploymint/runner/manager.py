@@ -45,12 +45,14 @@ async def start_run(project: Project, *, force=False, trigger="api", skip_deploy
 
     bus.add_sink(persist)
     _tasks[run_id] = asyncio.create_task(
-        _execute(run_id, project.id, project.name, project.repo_path, force, skip_deploy, bus)
+        _execute(run_id, project.id, project.name, project.repo_path, force, skip_deploy,
+                bus, project.cloud_provider)
     )
     return run_id
 
 
-async def _execute(run_id, project_id, name, repo_path, force, skip_deploy, bus):
+async def _execute(run_id, project_id, name, repo_path, force, skip_deploy, bus,
+                   cloud_provider="aws"):
     Session = get_session_factory()
     t0 = time.perf_counter()
 
@@ -64,6 +66,7 @@ async def _execute(run_id, project_id, name, repo_path, force, skip_deploy, bus)
         state = {
             "run_id": run_id, "project_id": project_id, "project_name": name,
             "repo_path": repo_path, "force": force, "errors": [], "current_node": "",
+            "cloud_provider": cloud_provider,
         }
         final = state
 

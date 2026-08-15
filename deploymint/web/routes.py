@@ -31,7 +31,7 @@ def index(request: Request, db: Session = Depends(get_db)):
 @router.post("/projects/register")
 def register_project_form(
     request: Request, name: str = Form(...), repo_path: str = Form(...),
-    db: Session = Depends(get_db),
+    cloud_provider: str = Form("aws"), db: Session = Depends(get_db),
 ):
     projects = db.query(Project).order_by(Project.created_at.desc()).all()
     try:
@@ -46,7 +46,10 @@ def register_project_form(
             {"projects": projects, "error": f"project '{name}' already exists"},
             status_code=409)
 
-    p = Project(name=name, repo_path=str(path))
+    if cloud_provider not in ("aws", "gcp", "azure"):
+        cloud_provider = "aws"
+
+    p = Project(name=name, repo_path=str(path), cloud_provider=cloud_provider)
     db.add(p)
     db.commit()
     return RedirectResponse(f"/projects/{p.id}", status_code=303)
