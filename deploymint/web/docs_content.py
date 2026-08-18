@@ -52,6 +52,7 @@ NAV: list[DocPage] = [
     DocPage("18-iac-generation", "IaC Generation", DOCS_DIR / "18-iac-generation.md"),
     DocPage("19-managed-clusters", "Managed Clusters", DOCS_DIR / "19-managed-clusters.md"),
     DocPage("20-in-app-docs", "This Docs Viewer", DOCS_DIR / "20-in-app-docs.md"),
+    DocPage("21-cloud-deploy", "Cloud Deploy", DOCS_DIR / "21-cloud-deploy.md"),
 ]
 
 _by_slug = {p.slug: p for p in NAV}

@@ -61,6 +61,14 @@ class Run(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
+    # A one-click "terraform apply" against a real cloud account, run on demand
+    # well after the pipeline finishes — see docs/21-cloud-deploy.md. Never
+    # stores credentials; only the plan/apply outcome and its console output.
+    cloud_deploy_status: Mapped[str | None] = mapped_column(String(20))  # running|success|failed
+    cloud_deploy_action: Mapped[str | None] = mapped_column(String(20))  # plan|apply|destroy
+    cloud_deploy_output: Mapped[str | None] = mapped_column(Text)
+    cloud_deployed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
     project: Mapped[Project] = relationship(back_populates="runs")
 
     __table_args__ = (Index("ix_runs_project_created", "project_id", "created_at"),)

@@ -75,7 +75,9 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 # Tests shell out to docker/kubectl/checkov with fixed, hardcoded argv lists —
 # not user-controlled input, so the "untrusted subprocess" rules don't apply.
-"tests/*" = ["S603", "S607", "S108"]
+# S105/S106: fake cloud credential strings used to test core/cloud_creds.py
+# and core/terraform_exec.py — never real secrets.
+"tests/*" = ["S603", "S607", "S108", "S105", "S106"]
 # Embedded Dockerfile/YAML content as Python string literals — wrapping these
 # fragments would fragment the generated artifact's own readability for no benefit.
 "deploymint/agents/templates.py" = ["E501"]

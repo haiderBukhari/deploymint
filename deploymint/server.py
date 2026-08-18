@@ -10,7 +10,7 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
 from deploymint import __version__
-from deploymint.api import chat, costs, health, projects, runs, ws
+from deploymint.api import chat, cloud_deploy, costs, health, projects, runs, ws
 from deploymint.db.database import init_db
 from deploymint.web import routes as web_routes
 
@@ -29,6 +29,7 @@ def create_app() -> FastAPI:
     app.include_router(projects.router)
     app.include_router(runs.router)
     app.include_router(ws.router)
+    app.include_router(cloud_deploy.router)
     app.include_router(chat.router)
     app.include_router(costs.router)
     app.include_router(web_routes.router)

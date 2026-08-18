@@ -2,7 +2,7 @@ FROM python:3.11-slim AS base
 
 # System deps baked in ONCE — see docs/00-prerequisites.md §0.3 for why each is here
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        git tmux curl ca-certificates \
+        git tmux curl ca-certificates unzip \
     && rm -rf /var/lib/apt/lists/*
 
 # kubectl — pinned version, not "latest"
@@ -20,6 +20,16 @@ RUN curl -Lo /usr/local/bin/opa \
 # docker CLI only (client) — talks to the mounted host socket, no daemon needed here
 RUN curl -fsSL https://download.docker.com/linux/static/stable/x86_64/docker-27.3.1.tgz \
         | tar xz -C /usr/local/bin --strip-components=1 docker/docker
+
+# terraform — pinned version. Needed for the one-click "sync to cloud" action
+# (api/cloud_deploy.py) that runs the generated Terraform module against a
+# real AWS/Azure/GCP account. See docs/21-cloud-deploy.md.
+ARG TERRAFORM_VERSION=1.9.8
+RUN curl -Lo /tmp/terraform.zip \
+        "https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}/terraform_${TERRAFORM_VERSION}_linux_amd64.zip" \
+    && unzip -o /tmp/terraform.zip -d /usr/local/bin \
+    && rm /tmp/terraform.zip \
+    && chmod +x /usr/local/bin/terraform
 
 WORKDIR /app
 

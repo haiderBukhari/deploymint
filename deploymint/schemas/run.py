@@ -33,6 +33,10 @@ class RunRead(BaseModel):
     duration_ms: int | None = None
     created_at: datetime
     completed_at: datetime | None = None
+    cloud_deploy_status: str | None = None
+    cloud_deploy_action: str | None = None
+    cloud_deploy_output: str | None = None
+    cloud_deployed_at: datetime | None = None
 
     model_config = {"from_attributes": True}
 

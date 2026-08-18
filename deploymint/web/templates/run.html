@@ -137,9 +137,51 @@
   {% endif %}
 </div>
 
+{% if run.status == "success" and run.artifacts and run.artifacts.terraform %}
+<div class="card" id="cloud-deploy" data-run-id="{{ run.id }}" data-cloud="{{ project.cloud_provider if project else 'aws' }}">
+  <div class="section-label">Cloud Deploy · {{ (project.cloud_provider if project else 'aws') | upper }}</div>
+  <p class="muted">
+    Runs the generated <code>terraform/main.tf</code> against a real cloud account.
+    Credentials are sent for this action only — never stored, never logged, never
+    written to disk here. See <a href="/guide/21-cloud-deploy">how this works</a>.
+  </p>
+
+  <div id="cloud-creds-aws" class="cloud-creds">
+    <div class="form-row"><label>AWS Access Key ID<input type="password" id="cd-aws-key" autocomplete="off"></label></div>
+    <div class="form-row"><label>AWS Secret Access Key<input type="password" id="cd-aws-secret" autocomplete="off"></label></div>
+    <div class="form-row"><label>Session Token (optional, for temporary creds)<input type="password" id="cd-aws-token" autocomplete="off"></label></div>
+    <div class="form-row"><label>Region<input type="text" id="cd-aws-region" placeholder="us-east-1"></label></div>
+  </div>
+
+  <div id="cloud-creds-azure" class="cloud-creds" style="display:none;">
+    <div class="form-row"><label>Subscription ID<input type="password" id="cd-az-sub" autocomplete="off"></label></div>
+    <div class="form-row"><label>Tenant ID<input type="password" id="cd-az-tenant" autocomplete="off"></label></div>
+    <div class="form-row"><label>Client ID<input type="password" id="cd-az-client" autocomplete="off"></label></div>
+    <div class="form-row"><label>Client Secret<input type="password" id="cd-az-secret" autocomplete="off"></label></div>
+  </div>
+
+  <div id="cloud-creds-gcp" class="cloud-creds" style="display:none;">
+    <div class="form-row"><label>Project ID<input type="text" id="cd-gcp-project"></label></div>
+    <div class="form-row"><label>Service Account JSON<textarea id="cd-gcp-json" rows="4" autocomplete="off"></textarea></label></div>
+  </div>
+
+  <div class="form-row">
+    <button id="cd-plan-btn" type="button">Run Plan</button>
+    <button class="btn-danger" id="cd-apply-btn" type="button" disabled>Apply</button>
+  </div>
+  <label class="muted" style="display:block; margin-top:0.4rem;">
+    <input type="checkbox" id="cd-confirm"> I understand Apply creates/modifies real cloud
+    resources and may incur cost.
+  </label>
+
+  <pre id="cloud-deploy-output" class="terminal" style="margin-top:0.8rem;"></pre>
+</div>
+{% endif %}
+
 <script src="/static/app.js"></script>
 <script>
 connectRun("{{ run.id }}", 0, "{{ run.status }}");
 wireArtifactTabs("{{ run.id }}");
+wireCloudDeploy("{{ run.id }}");
 </script>
 {% endblock %}

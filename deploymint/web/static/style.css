@@ -121,6 +121,24 @@ button {
 }
 button:hover { opacity: 0.88; }
 button.primary { font-size: 0.95rem; padding: 0.6rem 1.4rem; }
+button:disabled { opacity: 0.4; cursor: not-allowed; }
+button.btn-danger { background: #d64545; }
+
+.form-row { margin-bottom: 0.6rem; }
+.form-row label { display: block; font-size: 0.82rem; color: var(--muted); margin-bottom: 0.25rem; }
+input[type="password"], textarea {
+  width: 100%;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 0.55rem 0.75rem;
+  border-radius: 6px;
+  font-size: 0.9rem;
+  font-family: inherit;
+}
+input[type="password"]:focus, textarea:focus { outline: 2px solid var(--mint); outline-offset: -1px; }
+textarea { font-family: "SF Mono", Menlo, monospace; font-size: 0.8rem; resize: vertical; }
+.cloud-creds { max-width: 420px; }
 
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 1rem; }
 .project-card {

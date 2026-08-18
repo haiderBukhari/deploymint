@@ -7,6 +7,7 @@ import asyncio
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
+from deploymint.core.cloud_jobs import registry as cloud_job_registry
 from deploymint.core.events import registry
 from deploymint.db.database import get_session_factory
 from deploymint.db.models import Event, Run
@@ -64,6 +65,44 @@ async def stream_run(ws: WebSocket, run_id: str):
         pass
     finally:
         bus.unsubscribe(queue)
+        try:
+            await ws.close()
+        except Exception:
+            pass
+
+
+@router.websocket("/ws/deploy/{run_id}")
+async def stream_cloud_deploy(ws: WebSocket, run_id: str):
+    """Live console output for a terraform plan/apply/destroy started via
+    POST /api/runs/{run_id}/cloud/{action}. See core/cloud_jobs.py — this is
+    a separate in-memory registry from the run's own EventBus because a
+    cloud deploy is triggered well after the run (and its bus) is gone."""
+    await ws.accept()
+    job = cloud_job_registry.get(run_id)
+    if not job:
+        await ws.send_json({"type": "cloud.error", "line": "no deploy job for this run"})
+        await ws.close()
+        return
+
+    for line in list(job.lines):
+        await ws.send_json({"type": "cloud.line", "line": line})
+    if job.status != "running":
+        await ws.send_json({"type": "cloud.end", "status": job.status})
+        await ws.close()
+        return
+
+    queue = job.subscribe()
+    try:
+        while True:
+            line = await queue.get()
+            if line == "__end__":
+                await ws.send_json({"type": "cloud.end", "status": job.status})
+                break
+            await ws.send_json({"type": "cloud.line", "line": line})
+    except WebSocketDisconnect:
+        pass
+    finally:
+        job.unsubscribe(queue)
         try:
             await ws.close()
         except Exception:

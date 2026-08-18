@@ -84,7 +84,8 @@ def run_page(request: Request, run_id: str, db: Session = Depends(get_db)):
     project = db.get(Project, r.project_id)
     return templates.TemplateResponse(
         request, "run.html",
-        {"run": r, "project_name": project.name if project else "?", "nodes": NODES})
+        {"run": r, "project": project, "project_name": project.name if project else "?",
+         "nodes": NODES})
 
 
 @router.get("/costs", response_class=HTMLResponse)

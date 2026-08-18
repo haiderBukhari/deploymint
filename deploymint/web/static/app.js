@@ -295,6 +295,93 @@ async function wireArtifactTabs(runId) {
   if (first) load(first.dataset.file);
 }
 
+function collectCloudCreds(cloud) {
+  if (cloud === "azure") {
+    return {
+      azure_subscription_id: document.getElementById("cd-az-sub").value,
+      azure_tenant_id: document.getElementById("cd-az-tenant").value,
+      azure_client_id: document.getElementById("cd-az-client").value,
+      azure_client_secret: document.getElementById("cd-az-secret").value,
+    };
+  }
+  if (cloud === "gcp") {
+    return {
+      gcp_project: document.getElementById("cd-gcp-project").value,
+      gcp_credentials_json: document.getElementById("cd-gcp-json").value,
+    };
+  }
+  return {
+    aws_access_key_id: document.getElementById("cd-aws-key").value,
+    aws_secret_access_key: document.getElementById("cd-aws-secret").value,
+    aws_session_token: document.getElementById("cd-aws-token").value,
+    aws_region: document.getElementById("cd-aws-region").value,
+  };
+}
+
+function wireCloudDeploy(runId) {
+  const card = document.getElementById("cloud-deploy");
+  if (!card) return;
+  const cloud = card.dataset.cloud;
+  const output = document.getElementById("cloud-deploy-output");
+  const planBtn = document.getElementById("cd-plan-btn");
+  const applyBtn = document.getElementById("cd-apply-btn");
+  const confirmBox = document.getElementById("cd-confirm");
+
+  ["aws", "azure", "gcp"].forEach((c) => {
+    const el = document.getElementById(`cloud-creds-${c}`);
+    if (el) el.style.display = c === cloud ? "" : "none";
+  });
+
+  confirmBox.addEventListener("change", () => {
+    applyBtn.disabled = !confirmBox.checked || applyBtn.dataset.planOk !== "1";
+  });
+
+  function streamOutput(onEnd) {
+    const proto = location.protocol === "https:" ? "wss" : "ws";
+    const ws = new WebSocket(`${proto}://${location.host}/ws/deploy/${runId}`);
+    ws.onmessage = (ev) => {
+      const msg = JSON.parse(ev.data);
+      if (msg.type === "cloud.line") {
+        output.textContent += (output.textContent ? "\n" : "") + msg.line;
+        output.scrollTop = output.scrollHeight;
+      } else if (msg.type === "cloud.end") {
+        onEnd(msg.status);
+      } else if (msg.type === "cloud.error") {
+        output.textContent += `\n${msg.line}`;
+      }
+    };
+  }
+
+  async function run(action, btn) {
+    output.textContent = "";
+    btn.disabled = true;
+    const r = await fetch(`/api/runs/${runId}/cloud/${action}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(collectCloudCreds(cloud)),
+    });
+    if (!r.ok) {
+      const body = await r.json().catch(() => ({}));
+      output.textContent = `error: ${body.detail || r.statusText}`;
+      btn.disabled = false;
+      return;
+    }
+    streamOutput((status) => {
+      btn.disabled = false;
+      if (action === "plan") {
+        applyBtn.dataset.planOk = status === "success" ? "1" : "0";
+        applyBtn.disabled = !(status === "success" && confirmBox.checked);
+      }
+    });
+  }
+
+  planBtn.addEventListener("click", () => run("plan", planBtn));
+  applyBtn.addEventListener("click", () => {
+    if (!confirmBox.checked) return;
+    run("apply", applyBtn);
+  });
+}
+
 function wireCostForm() {
   const form = document.getElementById("cost-form");
   if (!form) return;
