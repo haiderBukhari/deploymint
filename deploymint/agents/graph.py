@@ -9,6 +9,7 @@ from langgraph.graph import END, StateGraph
 from deploymint.agents.architect import ArchitectAgent
 from deploymint.agents.execution import ExecutionEngineAgent
 from deploymint.agents.finops import FinOpsAgent
+from deploymint.agents.image_scan import ImageScanAgent
 from deploymint.agents.oracle import ObservabilityOracleAgent
 from deploymint.agents.redteam import RedTeamAgent
 from deploymint.agents.smith import ArtifactSmithAgent
@@ -81,7 +82,19 @@ def build_graph(bus=None, *, skip_deploy: bool = False):
         g.add_node("oracle", _wrap(ObservabilityOracleAgent(bus)))
         g.add_conditional_edges(gate_source, security_gate,
                                 {"execute": "execution", "blocked": "blocked"})
-        g.add_conditional_edges("execution", post_execution,
+
+        # Image scanning needs the built image, which only exists after
+        # Execution — a different graph position than the Warden's
+        # pre-deploy slot. Never blocks: the deploy already happened, so a
+        # CVE found here surfaces for the next run/fix cycle instead.
+        if s.enable_trivy:
+            g.add_node("image_scan", _wrap(ImageScanAgent(bus)))
+            g.add_edge("execution", "image_scan")
+            post_execution_source = "image_scan"
+        else:
+            post_execution_source = "execution"
+
+        g.add_conditional_edges(post_execution_source, post_execution,
                                 {"observe": "oracle", "finops": "finops"})
         g.add_edge("oracle", "finops")
 

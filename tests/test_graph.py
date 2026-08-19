@@ -63,6 +63,25 @@ async def test_compromised_output_stops_at_blocked_node(tmp_path):
     assert final["security"]["passed"] is False
 
 
+def test_image_scan_node_wired_in_when_trivy_enabled_and_not_skipping_deploy():
+    graph = build_graph(skip_deploy=False)
+    assert "image_scan" in graph.get_graph().nodes
+
+
+def test_image_scan_node_absent_when_trivy_disabled():
+    from deploymint.config import Settings
+
+    with patch("deploymint.agents.graph.get_settings",
+               return_value=Settings(enable_trivy=False)):
+        graph = build_graph(skip_deploy=False)
+    assert "image_scan" not in graph.get_graph().nodes
+
+
+def test_image_scan_node_absent_when_deploy_is_skipped():
+    graph = build_graph(skip_deploy=True)
+    assert "image_scan" not in graph.get_graph().nodes
+
+
 @pytest.mark.asyncio
 async def test_force_reaches_end_despite_a_block(tmp_path):
     import json

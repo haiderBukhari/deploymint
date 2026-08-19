@@ -197,6 +197,14 @@
       OPA {{ 'ran ✓' if run.security.opa_ran else 'did not run ✗' }}</span>
     <span class="badge {{ 'badge-ok' if run.security.redteam_ran else 'badge-fail' }}">
       Red Team {{ 'ran ✓' if run.security.redteam_ran else 'did not run ✗' }}</span>
+    {% if run.security.trivy_ran is defined %}
+    <span class="badge {{ 'badge-ok' if run.security.trivy_ran else 'badge-fail' }}">
+      Trivy (deps) {{ 'ran ✓' if run.security.trivy_ran else 'did not run ✗' }}</span>
+    {% endif %}
+    {% if run.security.trivy_image_ran is defined %}
+    <span class="badge {{ 'badge-ok' if run.security.trivy_image_ran else 'badge-fail' }}">
+      Trivy (image) {{ 'ran ✓' if run.security.trivy_image_ran else 'did not run ✗' }}</span>
+    {% endif %}
   </div>
   {% endif %}
 

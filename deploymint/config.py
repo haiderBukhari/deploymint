@@ -47,6 +47,10 @@ class Settings(BaseSettings):
     # security
     block_severity: str = "critical"  # critical | high | medium
     enable_redteam: bool = True
+    # Real CVE scanning (dependencies + the built image), on top of Checkov/OPA's
+    # misconfiguration checks. Degrades to today's behavior when the trivy
+    # binary isn't installed — see core/scanners.py's never-raise contract.
+    enable_trivy: bool = True
 
     # runtime
     max_concurrent_runs: int = 2

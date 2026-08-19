@@ -51,17 +51,32 @@ class SecurityWardenAgent(BaseAgent):
         opa_findings, opa_err = await scanners.run_opa(artifacts)
 
         findings = ck_findings + opa_findings
+
+        checkov_ran, opa_ran = ck_err is None, opa_err is None
+        # Trivy is additive coverage (real CVEs, not misconfigurations) — its
+        # absence alone must not trip the fail-closed gate below when Checkov
+        # or OPA are still working.
+        trivy_ran = False
+        if s.enable_trivy:
+            tv_findings, tv_err = await scanners.run_trivy_fs(directory)
+            trivy_ran = tv_err is None
+            findings += tv_findings
+
         await _add_explanations(findings)
         for f in findings:
             await self.emit("warden.finding", **f)
 
-        checkov_ran, opa_ran = ck_err is None, opa_err is None
-        if not checkov_ran and not opa_ran:
+        ran_flags = [checkov_ran, opa_ran] + ([trivy_ran] if s.enable_trivy else [])
+        if not any(ran_flags):
+            reasons = [f"checkov: {ck_err}", f"opa: {opa_err}"]
+            if s.enable_trivy:
+                reasons.append(f"trivy: {tv_err}")
             report = {
                 "passed": False, "findings": findings,
                 "checkov_ran": False, "opa_ran": False, "redteam_ran": False,
+                "trivy_ran": False,
                 "blocked_reason": "No security scanner available — failing closed. "
-                                  f"checkov: {ck_err}; opa: {opa_err}",
+                                  + "; ".join(reasons),
             }
             await self.emit("warden.done", passed=False, critical=0, high=0, medium=0, low=0)
             return {"security": report}
@@ -75,6 +90,7 @@ class SecurityWardenAgent(BaseAgent):
         report = {
             "passed": passed, "findings": findings,
             "checkov_ran": checkov_ran, "opa_ran": opa_ran, "redteam_ran": False,
+            "trivy_ran": trivy_ran,
         }
         if not passed:
             top = blockers[0]

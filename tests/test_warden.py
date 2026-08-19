@@ -1,4 +1,4 @@
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -101,6 +101,49 @@ async def test_explanation_failure_does_not_block_or_crash(tmp_path):
         )
     assert out["security"]["passed"] is False
     assert out["security"]["blocked_reason"]
+
+
+@pytest.mark.asyncio
+async def test_trivy_findings_are_merged_in_and_flagged_ran(tmp_path):
+    fake_findings = [{"id": "CVE-2024-1", "severity": "high", "source": "trivy",
+                      "file": "requirements.txt", "message": "vuln", "remediation": "upgrade"}]
+    with patch("deploymint.core.scanners.run_trivy_fs",
+               new=AsyncMock(return_value=(fake_findings, None))):
+        out = await SecurityWardenAgent().run(
+            {"run_id": "run_trivy1", "repo_path": str(tmp_path),
+             "artifacts": BAD, "errors": []}
+        )
+    sec = out["security"]
+    assert sec["trivy_ran"] is True
+    ids = {f["id"] for f in sec["findings"]}
+    assert "CVE-2024-1" in ids
+
+
+@pytest.mark.asyncio
+async def test_trivy_absence_alone_does_not_fail_closed(tmp_path):
+    """Trivy is additive coverage — Checkov/OPA still working means the run
+    proceeds on their verdict alone, even if trivy isn't installed."""
+    with patch("deploymint.core.scanners.run_trivy_fs",
+               new=AsyncMock(return_value=([], "trivy not installed"))):
+        out = await SecurityWardenAgent().run(
+            {"run_id": "run_trivy2", "repo_path": str(tmp_path),
+             "artifacts": {"language": "python"} | {}, "errors": []}
+        )
+    sec = out["security"]
+    assert sec["trivy_ran"] is False
+    assert sec["checkov_ran"] is True or sec["opa_ran"] is True
+
+
+@pytest.mark.asyncio
+async def test_all_three_scanners_failing_fails_closed(tmp_path, monkeypatch):
+    monkeypatch.setattr("shutil.which", lambda name: None)
+    out = await SecurityWardenAgent().run(
+        {"run_id": "run_none2", "repo_path": str(tmp_path), "artifacts": BAD, "errors": []}
+    )
+    sec = out["security"]
+    assert sec["passed"] is False
+    assert sec["trivy_ran"] is False
+    assert "trivy" in sec["blocked_reason"].lower()
 
 
 @pytest.mark.asyncio
