@@ -24,18 +24,25 @@ NODES = ["architect", "smith", "warden", "redteam", "execution", "oracle", "fino
 
 
 @router.get("/", response_class=HTMLResponse)
-def index(request: Request, db: Session = Depends(get_db)):
+def index(request: Request):
+    """The marketing landing page — no DB query, nothing functional. The
+    register-a-project form and the project grid live at /dashboard. See
+    docs/24-landing-and-docs.md."""
+    return templates.TemplateResponse(request, "index.html", {})
+
+
+@router.get("/dashboard", response_class=HTMLResponse)
+def dashboard(request: Request, db: Session = Depends(get_db)):
     projects = db.query(Project).order_by(Project.created_at.desc()).all()
     # One extra small query per project (dashboard-scale, not a hot path) —
-    # gives each card a last-run status/time instead of just a bare name, so
-    # the landing page actually tells you something before you click in.
+    # gives each card a last-run status/time instead of just a bare name.
     latest_runs = {
         p.id: db.query(Run).filter(Run.project_id == p.id)
                  .order_by(Run.created_at.desc()).first()
         for p in projects
     }
     return templates.TemplateResponse(
-        request, "index.html", {"projects": projects, "latest_runs": latest_runs})
+        request, "dashboard.html", {"projects": projects, "latest_runs": latest_runs})
 
 
 @router.post("/projects/register")
@@ -48,7 +55,7 @@ def register_project_form(
         path = validate_repo_path(repo_path)
     except SandboxError as e:
         return templates.TemplateResponse(
-            request, "index.html", {"projects": projects, "error": str(e)}, status_code=400)
+            request, "dashboard.html", {"projects": projects, "error": str(e)}, status_code=400)
 
     # Same sanitization the JSON API's ProjectCreate applies (core/naming.py)
     # — this form used to skip it entirely, so a name like "bew proj" would
@@ -58,11 +65,11 @@ def register_project_form(
         name = slugify(name)
     except ValueError as e:
         return templates.TemplateResponse(
-            request, "index.html", {"projects": projects, "error": str(e)}, status_code=400)
+            request, "dashboard.html", {"projects": projects, "error": str(e)}, status_code=400)
 
     if db.query(Project).filter_by(name=name).first():
         return templates.TemplateResponse(
-            request, "index.html",
+            request, "dashboard.html",
             {"projects": projects, "error": f"project '{name}' already exists"},
             status_code=409)
 

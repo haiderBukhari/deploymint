@@ -15,14 +15,25 @@ def _wait_for_status(client, run_id, timeout=30):
     raise TimeoutError(f"run {run_id} did not reach a terminal status in {timeout}s")
 
 
-def test_index_page_renders_with_no_projects(client):
+def test_index_page_renders_as_pure_marketing(client):
+    """/ is a marketing page now — no DB query, no register form, no project
+    grid. That functionality moved to /dashboard. See docs/24-landing-and-docs.md."""
     r = client.get("/")
     assert r.status_code == 200
     assert "DeployMint" in r.text
+    assert "Ship secure infrastructure" in r.text
+    assert 'href="/dashboard"' in r.text
+    assert 'name="repo_path"' not in r.text  # the register form lives elsewhere now
 
 
-def test_index_page_lists_a_registered_project(client, registered_project):
-    r = client.get("/")
+def test_dashboard_page_renders_with_no_projects(client):
+    r = client.get("/dashboard")
+    assert r.status_code == 200
+    assert "Register a project" in r.text
+
+
+def test_dashboard_page_lists_a_registered_project(client, registered_project):
+    r = client.get("/dashboard")
     assert registered_project["name"] in r.text
 
 

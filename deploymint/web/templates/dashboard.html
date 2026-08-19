@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% block title %}Dashboard · DeployMint{% endblock %}
+{% block content %}
+<h1>Dashboard</h1>
+<p class="muted" style="margin-top:-0.5rem;">Register a repo under <code>./projects</code>, then deploy it — Dockerfile, Kubernetes manifests, and the rest of the pipeline, generated automatically.</p>
+
+<div class="card">
+  <div class="section-label">Register a project</div>
+  <form class="form" method="post" action="/projects/register">
+    <input type="text" name="name" placeholder="project-name (lowercase, hyphens)" required
+           title="Used as a Docker image tag and Kubernetes/Terraform resource name — spaces and uppercase are auto-converted to hyphens.">
+
+    <input type="text" name="repo_path" placeholder="/workspace/my-app" required>
+    <select name="cloud_provider" title="Which cloud's Terraform module to generate (ECR/EKS, Artifact Registry/GKE, or ACR/AKS)">
+      <option value="aws" selected>AWS (ECR + optional EKS)</option>
+      <option value="gcp">GCP (Artifact Registry + optional GKE)</option>
+      <option value="azure">Azure (ACR + optional AKS)</option>
+    </select>
+    <button type="submit">Register</button>
+  </form>
+  {% if error %}<p class="error" style="margin-bottom:0;">{{ error }}</p>{% endif %}
+</div>
+
+{% if projects %}
+<div class="grid">
+  {% for p in projects %}
+  {% set last_run = latest_runs.get(p.id) if latest_runs else none %}
+  <a class="card project-card" href="/projects/{{ p.id }}">
+    <div class="project-card-top">
+      <div class="project-name">{{ p.name }}</div>
+      {% if last_run %}<span class="status status-{{ last_run.status }}">{{ last_run.status }}</span>{% endif %}
+    </div>
+    <div class="badges">
+      {% if p.language %}<span class="badge">{{ p.language }}</span>{% endif %}
+      {% if p.framework %}<span class="badge">{{ p.framework }}</span>{% endif %}
+    </div>
+    <div class="muted project-card-path">{{ p.repo_path }}</div>
+    <div class="muted project-card-lastrun">
+      {% if last_run %}Last run {{ last_run.created_at.strftime('%b %-d, %H:%M') }}{% else %}Never deployed{% endif %}
+    </div>
+  </a>
+  {% endfor %}
+</div>
+{% else %}
+<div class="card empty-state">
+  <div class="empty-icon">📦</div>
+  <div class="empty-title">No projects registered yet</div>
+  <div class="empty-hint">Register a repo above to generate its Dockerfile, Kubernetes manifests, and the rest of the pipeline.</div>
+</div>
+{% endif %}
+{% endblock %}
