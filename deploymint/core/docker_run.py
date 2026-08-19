@@ -14,13 +14,29 @@ mapping does whenever the deployed app's exposed port matches it (commonly
 
 from deploymint.core.runner import run_command
 
+_NAME_CONFLICT_MARKERS = ("conflict", "already in use")
+
 
 async def run_container(name: str, image: str, port: int, **kw):
-    await run_command(["docker", "rm", "-f", name], timeout=15)  # clean up a prior run
-    return await run_command(
-        ["docker", "run", "-d", "--name", name, "-p", f"127.0.0.1::{port}",
-         "--label", "managed-by=deploymint", image],
-        timeout=30, **kw)
+    """Redeploying the same project reuses the same container name on
+    purpose (see published_port's note on avoiding stray port drift) — which
+    means the prior container has to actually be gone before `docker run`,
+    not just asked to be. The old code fired `docker rm -f` and never looked
+    at whether it worked; if it raced with the previous container still
+    stopping (or failed for any other reason), `docker run` then failed with
+    Docker's own "Conflict... already in use" error — confirmed by hitting
+    this exact failure on a real back-to-back redeploy. One retry (remove
+    again, run again) mirrors the same self-healing step the generated
+    Ansible playbook already does for this exact scenario."""
+    run_args = ["docker", "run", "-d", "--name", name, "-p", f"127.0.0.1::{port}",
+                "--label", "managed-by=deploymint", image]
+
+    await run_command(["docker", "rm", "-f", name], timeout=15, **kw)
+    r = await run_command(run_args, timeout=30, **kw)
+    if not r.ok and any(m in r.combined.lower() for m in _NAME_CONFLICT_MARKERS):
+        await run_command(["docker", "rm", "-f", name], timeout=15, **kw)
+        r = await run_command(run_args, timeout=30, **kw)
+    return r
 
 
 async def published_port(name: str, container_port: int, **kw) -> int | None:

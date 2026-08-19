@@ -13,13 +13,30 @@ The dashboard is at `http://localhost:8000` once it's healthy.
 
 ## 2. Put your repo where DeployMint can see it
 
-DeployMint only ever looks inside `./projects` on your machine (mounted into
+DeployMint only ever looks inside one directory on your machine (mounted into
 the container as `/workspace`) — it can't reach anywhere else on your
-filesystem. Copy or symlink your project in:
+filesystem. That's a real sandbox boundary, not a UI limitation: the app runs
+in a container and simply has no view of anything not mounted into it.
+
+By default that directory is `./projects`, so the simplest option is to copy
+or symlink your project in:
 
 ```bash
 cp -r /path/to/your/app ./projects/my-app
 ```
+
+**Or point DeployMint at where your repos already live.** Set
+`DEPLOYMINT_PROJECTS_DIR` in your `.env` to any directory and everything
+inside it becomes available — no copying, and every folder in it shows up in
+the dashboard's folder picker automatically:
+
+```bash
+DEPLOYMINT_PROJECTS_DIR=~/code
+```
+
+Then `docker compose up -d` again to pick up the new mount. Keep the
+directory as narrow as is actually useful — everything under it is readable
+by the app.
 
 ## 3. Register it
 

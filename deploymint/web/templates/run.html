@@ -8,7 +8,7 @@
   <div class="section-label">Pipeline</div>
   <ul class="pipeline" id="timeline">
     <li data-node="architect">
-      <span class="step-icon">🔍</span>
+      <span class="step-icon">1</span>
       <div class="step-body">
         <div class="step-title">Architect<span class="step-time"></span></div>
         <div class="step-desc">Scans the repo with tree-sitter, builds the import graph, ranks files by PageRank criticality.</div>
@@ -16,23 +16,32 @@
       </div>
     </li>
     <li data-node="smith">
-      <span class="step-icon">🛠️</span>
+      <span class="step-icon">2</span>
       <div class="step-body">
         <div class="step-title">Artifact Smith<span class="step-time"></span></div>
         <div class="step-desc">Generates the Dockerfile and Kubernetes manifests, tailored to this repo — Claude-backed with a deterministic template fallback.</div>
         <div class="step-detail"></div>
+        {% if run.artifacts and run.artifacts.reasoning %}
+        <details class="step-more">
+          <summary>LLM reasoning</summary>
+          <p class="reasoning">{{ run.artifacts.reasoning }}</p>
+        </details>
+        {% endif %}
       </div>
     </li>
     <li data-node="warden">
-      <span class="step-icon">🛡️</span>
+      <span class="step-icon">3</span>
       <div class="step-body">
         <div class="step-title">Security Warden<span class="step-time"></span></div>
         <div class="step-desc">Scans everything generated with Checkov and custom OPA policies. This is the gate — a failing scan blocks the deploy.</div>
         <div class="step-detail"></div>
+        {% if run.security and run.security.findings %}
+        <a class="step-jump" href="#security-findings">Show all {{ run.security.findings | length }} finding(s) ↓</a>
+        {% endif %}
       </div>
     </li>
     <li data-node="redteam">
-      <span class="step-icon">🎯</span>
+      <span class="step-icon">4</span>
       <div class="step-body">
         <div class="step-title">Red Team<span class="step-time"></span></div>
         <div class="step-desc">Adversarially probes for backdoors, prompt-injection compliance, and supply-chain risks the scanners above wouldn't catch.</div>
@@ -40,23 +49,32 @@
       </div>
     </li>
     <li data-node="execution">
-      <span class="step-icon">🚀</span>
+      <span class="step-icon">5</span>
       <div class="step-body">
         <div class="step-title">Execution<span class="step-time"></span></div>
         <div class="step-desc">Builds the image via the mounted Docker socket and deploys it — to your cluster if one's reachable, otherwise a plain <code>docker run</code>.</div>
         <div class="step-detail"></div>
+        {% if run.deployment %}
+        <a class="step-jump" href="#terminal">↓ See full output in the Terminal</a>
+        {% endif %}
       </div>
     </li>
     <li data-node="oracle">
-      <span class="step-icon">👁️</span>
+      <span class="step-icon">6</span>
       <div class="step-body">
         <div class="step-title">Oracle<span class="step-time"></span></div>
         <div class="step-desc">Watches the fresh deploy for a short window and rolls it back automatically on a crash loop or repeated restarts.</div>
         <div class="step-detail"></div>
+        {% if run.deployment and run.deployment.anomaly_explanation %}
+        <details class="step-more">
+          <summary>Rollback explanation</summary>
+          <p class="reasoning">{{ run.deployment.anomaly_explanation }}</p>
+        </details>
+        {% endif %}
       </div>
     </li>
     <li data-node="finops">
-      <span class="step-icon">💰</span>
+      <span class="step-icon">7</span>
       <div class="step-body">
         <div class="step-title">FinOps<span class="step-time"></span></div>
         <div class="step-desc">Estimates monthly cost from the generated manifest's resource requests — deterministic arithmetic, never an LLM guess.</div>
@@ -103,7 +121,7 @@
     {% endif %}
     {% else %}
     <div class="skeleton">
-      <span class="skeleton-icon">🛠️</span>
+      <span class="skeleton-icon">{% include "icons/stack.svg" %}</span>
       <div class="skeleton-bars">
         <div class="skeleton-bar w-60"></div>
         <div class="skeleton-bar w-40"></div>
@@ -118,21 +136,28 @@
   </div>
 </div>
 
-<div class="card">
+<div class="card" id="security-findings">
   <div class="section-label">Security {% if run.security %}<span class="muted">· {{ run.security.findings | length }} findings</span>{% endif %}</div>
   {% if run.security %}
     {% if run.security.blocked_reason %}<p class="error">{{ run.security.blocked_reason }}</p>{% endif %}
     <ul class="findings" id="findings">
       {% for f in run.security.findings %}
+      {% set target = fixable_files.get(f.file) %}
       <li class="sev-{{ f.severity }}">
         {{ f.severity }} · {{ f.id }} · {{ f.message }}
         {% if f.explanation %}<div class="explanation">{{ f.explanation }}</div>{% endif %}
+        {% if target %}
+        <div class="finding-actions">
+          <button type="button" class="btn-suggest-fix"
+                  data-finding-id="{{ f.id }}" data-file="{{ target }}">Suggest a fix</button>
+        </div>
+        {% endif %}
       </li>
       {% endfor %}
     </ul>
   {% else %}
     <div class="skeleton">
-      <span class="skeleton-icon">🛡️</span>
+      <span class="skeleton-icon">{% include "icons/shield.svg" %}</span>
       <div class="skeleton-bars">
         <div class="skeleton-bar w-60"></div>
         <div class="skeleton-bar w-40"></div>
@@ -216,7 +241,7 @@
   </ul>
   {% else %}
   <div class="skeleton">
-    <span class="skeleton-icon">💰</span>
+    <span class="skeleton-icon skeleton-icon-text">$</span>
     <div class="skeleton-bars">
       <div class="skeleton-bar w-60"></div>
       <div class="skeleton-bar w-40"></div>
@@ -271,5 +296,6 @@
 connectRun("{{ run.id }}", 0, "{{ run.status }}");
 wireArtifactTabs("{{ run.id }}");
 wireCloudDeploy("{{ run.id }}");
+wireFixSuggestions("{{ run.id }}");
 </script>
 {% endblock %}

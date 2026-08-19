@@ -4,11 +4,12 @@ no build step. See docs/10-phase-6-finops-ui.md §6.4."""
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, Form, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from deploymint.api.costs import _sample_export_by_service
+from deploymint.core.artifact_store import FILENAMES as ARTIFACT_FILENAMES
 from deploymint.core.naming import slugify
 from deploymint.core.sandbox import SandboxError, list_workspace_dirs, validate_repo_path
 from deploymint.db.database import get_db
@@ -52,15 +53,28 @@ def register_project_form(
     request: Request, name: str = Form(...), repo_path: str = Form(...),
     cloud_provider: str = Form("aws"), db: Session = Depends(get_db),
 ):
+    # app.js's wireRegisterForm() submits via fetch (so a duplicate-name 409
+    # can show a rename modal instead of a dead-end page reload — see
+    # docs/27-rename-modal.md) and marks itself with this header. A plain
+    # HTML form submission (no JS) still works exactly as before — same
+    # validation, same redirect-on-success, just server-rendered errors
+    # instead of a modal.
+    is_ajax = request.headers.get("x-requested-with") == "fetch"
     projects = db.query(Project).order_by(Project.created_at.desc()).all()
     workspace_dirs = list_workspace_dirs()
+
+    def fail(message: str, status_code: int):
+        if is_ajax:
+            return JSONResponse({"error": message}, status_code=status_code)
+        return templates.TemplateResponse(
+            request, "dashboard.html",
+            {"projects": projects, "workspace_dirs": workspace_dirs, "error": message},
+            status_code=status_code)
+
     try:
         path = validate_repo_path(repo_path)
     except SandboxError as e:
-        return templates.TemplateResponse(
-            request, "dashboard.html",
-            {"projects": projects, "workspace_dirs": workspace_dirs, "error": str(e)},
-            status_code=400)
+        return fail(str(e), 400)
 
     # Same sanitization the JSON API's ProjectCreate applies (core/naming.py)
     # — this form used to skip it entirely, so a name like "bew proj" would
@@ -69,17 +83,10 @@ def register_project_form(
     try:
         name = slugify(name)
     except ValueError as e:
-        return templates.TemplateResponse(
-            request, "dashboard.html",
-            {"projects": projects, "workspace_dirs": workspace_dirs, "error": str(e)},
-            status_code=400)
+        return fail(str(e), 400)
 
     if db.query(Project).filter_by(name=name).first():
-        return templates.TemplateResponse(
-            request, "dashboard.html",
-            {"projects": projects, "workspace_dirs": workspace_dirs,
-             "error": f"project '{name}' already exists"},
-            status_code=409)
+        return fail(f"project '{name}' already exists", 409)
 
     if cloud_provider not in ("aws", "gcp", "azure"):
         cloud_provider = "aws"
@@ -87,6 +94,9 @@ def register_project_form(
     p = Project(name=name, repo_path=str(path), cloud_provider=cloud_provider)
     db.add(p)
     db.commit()
+
+    if is_ajax:
+        return JSONResponse({"redirect": f"/projects/{p.id}"}, status_code=201)
     return RedirectResponse(f"/projects/{p.id}", status_code=303)
 
 
@@ -110,6 +120,32 @@ async def deploy_project_form(project_id: int, db: Session = Depends(get_db)):
     return RedirectResponse(f"/runs/{run_id}", status_code=303)
 
 
+def _fixable_files(run: Run) -> dict[str, str]:
+    """Maps a finding's reported `file` to the real generated-artifact path
+    it belongs to, for the findings that have one at all. Checkov reports a
+    bare basename ("deploy.yml") while the artifact lives at a nested path
+    (".github/workflows/deploy.yml"), so match on basename. Findings with no
+    real file (Red Team's `file: "-"`) simply get no entry, and the template
+    then shows no "Suggest a fix" button for them. See docs/28-ai-fix.md."""
+    if not run.artifacts:
+        return {}
+    present = {
+        fname for key, fname in ARTIFACT_FILENAMES.items() if run.artifacts.get(key)
+    }
+    by_basename = {Path(f).name: f for f in present}
+
+    mapping: dict[str, str] = {}
+    for finding in (run.security or {}).get("findings", []):
+        reported = finding.get("file")
+        if not reported or reported == "-":
+            continue
+        if reported in present:
+            mapping[reported] = reported
+        elif Path(reported).name in by_basename:
+            mapping[reported] = by_basename[Path(reported).name]
+    return mapping
+
+
 @router.get("/runs/{run_id}", response_class=HTMLResponse)
 def run_page(request: Request, run_id: str, db: Session = Depends(get_db)):
     r = db.get(Run, run_id)
@@ -119,7 +155,7 @@ def run_page(request: Request, run_id: str, db: Session = Depends(get_db)):
     return templates.TemplateResponse(
         request, "run.html",
         {"run": r, "project": project, "project_name": project.name if project else "?",
-         "nodes": NODES})
+         "nodes": NODES, "fixable_files": _fixable_files(r)})
 
 
 @router.get("/costs", response_class=HTMLResponse)

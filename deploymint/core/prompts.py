@@ -130,3 +130,25 @@ INTENT_SYSTEM = """Classify the user's DevOps request. Return ONLY JSON:
  "params": {"replicas": <int|null>, "force": <bool>, "env": "<string|null>"},
  "confidence": 0.0-1.0}
 """
+
+FIX_SUGGESTION_PROMPT = """A security scanner flagged this issue in a generated
+deployment artifact.
+
+File: {filename}
+Finding id: {finding_id}
+Message: {message}
+Suggested remediation: {remediation}
+
+Here is the CURRENT full content of that file:
+---BEGIN FILE---
+{content}
+---END FILE---
+
+Rewrite the file so this specific finding is fixed. Requirements:
+- Make the MINIMUM change necessary to fix THIS finding. Do not refactor,
+  reformat, reorder, or "improve" anything else.
+- Preserve every unrelated line exactly as-is, including comments.
+- Keep the file valid and functional for its format.
+- Return ONLY the complete new file content. No markdown fences, no
+  explanation, no preamble.
+"""

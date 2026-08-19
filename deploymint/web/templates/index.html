@@ -17,8 +17,8 @@
     </div>
 
     <svg class="hero-art" viewBox="0 0 520 200" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Your code, secured, and deployed">
-      <line x1="106" y1="100" x2="214" y2="100" stroke="#0f9d70" stroke-width="3" stroke-dasharray="6 6"/>
-      <line x1="306" y1="100" x2="414" y2="100" stroke="#0f9d70" stroke-width="3" stroke-dasharray="6 6"/>
+      <line class="hero-art-flow-line" x1="106" y1="100" x2="214" y2="100" stroke="#0f9d70" stroke-width="3" stroke-dasharray="6 6"/>
+      <line class="hero-art-flow-line" x1="306" y1="100" x2="414" y2="100" stroke="#0f9d70" stroke-width="3" stroke-dasharray="6 6" style="animation-delay: 0.4s"/>
 
       <circle cx="60" cy="100" r="46" fill="#e6f7f0"/>
       <path d="M45 85 L30 100 L45 115 M75 85 L90 100 L75 115" stroke="#0f9d70" stroke-width="6" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
@@ -48,20 +48,20 @@
 <section class="landing-section">
   <h2 class="page-section-title">How it works</h2>
   <p class="muted" style="margin-top:-0.4rem;">One pipeline, seven specialized agents, each doing real work — not one LLM call pretending to be seven.</p>
-  <div class="hero-pipeline hero-pipeline-light">
-    <div class="hero-pipeline-step"><span>🔍</span>Architect</div>
-    <div class="hero-pipeline-arrow">→</div>
-    <div class="hero-pipeline-step"><span>🛠️</span>Smith</div>
-    <div class="hero-pipeline-arrow">→</div>
-    <div class="hero-pipeline-step"><span>🛡️</span>Warden</div>
-    <div class="hero-pipeline-arrow">→</div>
-    <div class="hero-pipeline-step"><span>🎯</span>Red Team</div>
-    <div class="hero-pipeline-arrow">→</div>
-    <div class="hero-pipeline-step"><span>🚀</span>Execution</div>
-    <div class="hero-pipeline-arrow">→</div>
-    <div class="hero-pipeline-step"><span>👁️</span>Oracle</div>
-    <div class="hero-pipeline-arrow">→</div>
-    <div class="hero-pipeline-step"><span>💰</span>FinOps</div>
+  <div class="hero-pipeline hero-pipeline-light hero-pipeline-animated">
+    <div class="hero-pipeline-step"><span class="hero-pipeline-num">1</span>Architect</div>
+    <div class="hero-pipeline-arrow" style="animation-delay:0s">→</div>
+    <div class="hero-pipeline-step"><span class="hero-pipeline-num">2</span>Smith</div>
+    <div class="hero-pipeline-arrow" style="animation-delay:0.2s">→</div>
+    <div class="hero-pipeline-step"><span class="hero-pipeline-num">3</span>Warden</div>
+    <div class="hero-pipeline-arrow" style="animation-delay:0.4s">→</div>
+    <div class="hero-pipeline-step"><span class="hero-pipeline-num">4</span>Red Team</div>
+    <div class="hero-pipeline-arrow" style="animation-delay:0.6s">→</div>
+    <div class="hero-pipeline-step"><span class="hero-pipeline-num">5</span>Execution</div>
+    <div class="hero-pipeline-arrow" style="animation-delay:0.8s">→</div>
+    <div class="hero-pipeline-step"><span class="hero-pipeline-num">6</span>Oracle</div>
+    <div class="hero-pipeline-arrow" style="animation-delay:1s">→</div>
+    <div class="hero-pipeline-step"><span class="hero-pipeline-num">7</span>FinOps</div>
   </div>
 </section>
 
@@ -69,32 +69,32 @@
   <h2 class="page-section-title">Built for real deployments</h2>
   <div class="grid feature-grid">
     <div class="card feature-card">
-      <div class="feature-icon">🛡️</div>
+      <div class="feature-icon">{% include "icons/shield.svg" %}</div>
       <div class="feature-title">Security gate, not an afterthought</div>
       <div class="muted">Checkov's 550+ rules and custom OPA policies scan every generated artifact before anything runs. A failing scan blocks the deploy — it doesn't just warn.</div>
     </div>
     <div class="card feature-card">
-      <div class="feature-icon">🌐</div>
+      <div class="feature-icon">{% include "icons/globe.svg" %}</div>
       <div class="feature-title">Six IaC formats, one repo scan</div>
       <div class="muted">Dockerfile, Kubernetes manifests, Terraform (AWS/GCP/Azure), Ansible, ArgoCD, and GitHub Actions — generated together, tailored to your actual dependency graph.</div>
     </div>
     <div class="card feature-card">
-      <div class="feature-icon">📜</div>
+      <div class="feature-icon">{% include "icons/scroll.svg" %}</div>
       <div class="feature-title">Tamper-evident audit trail</div>
       <div class="muted">Every command DeployMint runs is recorded in a hash-chained log and a replayable terminal session — verifiable after the fact, not just trusted.</div>
     </div>
     <div class="card feature-card">
-      <div class="feature-icon">💰</div>
+      <div class="feature-icon feature-icon-text">$</div>
       <div class="feature-title">Cost visibility from day one</div>
       <div class="muted">Deterministic monthly cost estimates from real resource requests, plus live AWS Cost Explorer integration when you're ready for it.</div>
     </div>
     <div class="card feature-card">
-      <div class="feature-icon">💬</div>
+      <div class="feature-icon">{% include "icons/chat.svg" %}</div>
       <div class="feature-title">Talk to your infrastructure</div>
       <div class="muted">"Deploy my-app" or "what's the cost of my-app" — a natural-language assistant routes to the same pipeline everything else uses.</div>
     </div>
     <div class="card feature-card">
-      <div class="feature-icon">⌨️</div>
+      <div class="feature-icon">{% include "icons/terminal.svg" %}</div>
       <div class="feature-title">CLI-first, dashboard included</div>
       <div class="muted"><code>deploymint up ./my-repo</code> streams the whole pipeline live in your terminal — or watch it from the web dashboard instead.</div>
     </div>

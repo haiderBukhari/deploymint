@@ -147,6 +147,30 @@ input[type="text"] {
 .form-step select, .form-step input[type="text"] { width: 100%; }
 .form-step-hint { font-size: var(--text-xs); margin: var(--sp-1) 0 0; }
 .register-submit { flex: 0 0 auto; height: 38px; }
+
+/* --- Rename modal (duplicate project name) --- */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(31, 35, 40, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+  animation: fade-in 0.15s var(--ease);
+}
+.modal {
+  background: var(--panel);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+  padding: var(--sp-5);
+  width: 100%;
+  max-width: 380px;
+  margin: var(--sp-4);
+}
+.modal-title { font-weight: 700; font-size: var(--text-md); margin-bottom: var(--sp-2); }
+.modal input[type="text"] { width: 100%; margin-top: var(--sp-1); }
+.modal-actions { display: flex; justify-content: flex-end; gap: var(--sp-2); margin-top: var(--sp-4); }
 input[type="text"]:focus { outline: 2px solid var(--mint); outline-offset: -1px; }
 
 select {
@@ -284,6 +308,15 @@ tr:last-child td { border-bottom: none; }
   z-index: 0;
 }
 .pipeline li.done:not(:last-child)::before { background: var(--mint); }
+/* The currently-running step's connector animates as a moving flow instead
+   of a flat fill, so the live view visually shows progress moving down the
+   list rather than just a pulsing circle in isolation. */
+.pipeline li.running:not(:last-child)::before {
+  background: linear-gradient(var(--amber) 50%, var(--border) 50%);
+  background-size: 100% 16px;
+  animation: pipeline-connector-flow 0.6s linear infinite;
+}
+@keyframes pipeline-connector-flow { to { background-position: 0 16px; } }
 
 .pipeline .step-icon {
   position: relative;
@@ -322,6 +355,29 @@ tr:last-child td { border-bottom: none; }
 .pipeline .step-detail.visible { display: block; animation: fade-in 0.2s var(--ease); }
 
 @keyframes fade-in { from { opacity: 0; transform: translateY(-2px); } to { opacity: 1; transform: none; } }
+
+/* Per-step expandable detail — LLM reasoning, the full findings list, a
+   rollback explanation. Collapsed by default so the pipeline stays scannable
+   at a glance; the content is real data already computed elsewhere, just
+   surfaced here too for in-context review. */
+.step-more { margin-top: var(--sp-2); }
+.step-more summary {
+  cursor: pointer;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--mint);
+  list-style: none;
+}
+.step-more summary::-webkit-details-marker { display: none; }
+.step-more summary::before { content: "▸ "; }
+.step-more[open] summary::before { content: "▾ "; }
+.step-more .reasoning, .step-more .findings { margin-top: var(--sp-2); }
+
+.step-jump {
+  display: inline-block;
+  margin-top: var(--sp-2);
+  font-size: var(--text-sm);
+}
 
 .split { display: grid; grid-template-columns: 1fr 1fr; gap: 1.25rem; }
 .filelist { list-style: none; padding: 0; }
@@ -399,6 +455,40 @@ tr:last-child td { border-bottom: none; }
 .sev-medium { color: var(--amber); font-weight: 600; }
 .sev-low, .sev-info { color: var(--muted); }
 .explanation { color: var(--muted); font-size: 0.83rem; margin-top: 0.2rem; }
+
+/* --- AI fix suggestion per finding (see docs/28-ai-fix.md) --- */
+.finding-actions { display: flex; gap: var(--sp-2); margin-top: var(--sp-2); }
+.finding-actions button { font-size: var(--text-xs); padding: 0.35rem 0.75rem; }
+.fix-panel {
+  margin-top: var(--sp-3);
+  padding: var(--sp-3);
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-sm);
+  color: var(--text);
+  font-weight: 400;
+}
+.fix-panel-label { font-weight: 600; margin-bottom: var(--sp-2); }
+.diff {
+  background: #0d1117;
+  border-radius: var(--radius-sm);
+  padding: var(--sp-3);
+  margin: 0;
+  max-height: 320px;
+  overflow: auto;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.75rem;
+  line-height: 1.5;
+  color: #d8dee9;
+  white-space: pre;
+}
+.diff-add { color: #7ee2b8; }
+.diff-del { color: #ff8f8f; }
+.diff-hunk { color: #7fb3ff; }
+.diff-file { color: #8b949e; }
+.fix-result-ok { margin-top: var(--sp-2); color: var(--mint); font-weight: 600; }
+.fix-result-fail { margin-top: var(--sp-2); color: var(--red); font-weight: 600; }
 
 .stat-row { display: flex; gap: 1.5rem; flex-wrap: wrap; margin-bottom: 0.5rem; }
 .stat { background: var(--bg-subtle); border-radius: 8px; padding: 0.75rem 1rem; flex: 1; min-width: 140px; }
@@ -486,6 +576,8 @@ tr:last-child td { border-bottom: none; }
 .btn-cta-secondary:hover { border-color: var(--border-strong); text-decoration: none; }
 
 .hero-art { display: block; max-width: 520px; width: 100%; height: auto; margin: var(--sp-2) auto 0; }
+.hero-art-flow-line { animation: hero-art-flow 1s linear infinite; }
+@keyframes hero-art-flow { to { stroke-dashoffset: -24; } }
 
 .landing-section { margin-bottom: var(--sp-6); }
 .page-section-title { font-size: var(--text-lg); margin: 0 0 var(--sp-2); }
@@ -528,8 +620,45 @@ tr:last-child td { border-bottom: none; }
 
 .feature-grid { grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); }
 .feature-card { display: block; }
-.feature-icon { font-size: 1.6rem; margin-bottom: var(--sp-2); }
+.feature-icon {
+  display: flex; align-items: center; justify-content: center;
+  width: 40px; height: 40px;
+  border-radius: var(--radius-sm);
+  background: var(--mint-soft);
+  color: var(--mint);
+  margin-bottom: var(--sp-3);
+}
+.feature-icon svg { width: 22px; height: 22px; }
+.feature-icon-text { font-size: 1.3rem; font-weight: 800; }
 .feature-title { font-weight: 600; margin-bottom: var(--sp-1); }
+
+/* Numbered circle used in the landing page's pipeline strip — same shape
+   language as the run page's own numbered step icons. */
+.hero-pipeline-num {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 22px; height: 22px;
+  border-radius: 50%;
+  background: var(--panel);
+  border: 1.5px solid var(--mint);
+  color: var(--mint);
+  font-size: 0.72rem;
+  font-weight: 700;
+  margin-right: 0.3rem;
+}
+.hero-pipeline-light .hero-pipeline-num { background: var(--bg); }
+
+/* A looping "flow" animation along the pipeline strip's arrows — reads as
+   motion/process, not a static row of icons. Each arrow's delay is set
+   inline in the template (explicit per-position stagger; :nth-child can't
+   isolate just the .hero-pipeline-arrow divs from their sibling .step divs
+   since both share the same tag). */
+.hero-pipeline-animated .hero-pipeline-arrow {
+  animation: pipeline-flow 1.8s ease-in-out infinite;
+}
+@keyframes pipeline-flow {
+  0%, 100% { opacity: 0.35; transform: translateX(0); }
+  50% { opacity: 1; transform: translateX(3px); }
+}
 
 @media (max-width: 700px) {
   .hero-pipeline { overflow-x: auto; flex-wrap: nowrap; justify-content: flex-start; }

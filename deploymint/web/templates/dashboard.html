@@ -65,12 +65,15 @@
 </div>
 {% else %}
 <div class="card empty-state">
-  <div class="empty-icon">📦</div>
+  <div class="empty-icon">{% include "icons/box.svg" %}</div>
   <div class="empty-title">No projects registered yet</div>
   <div class="empty-hint">Register a repo above to generate its Dockerfile, Kubernetes manifests, and the rest of the pipeline.</div>
 </div>
 {% endif %}
 
 <script src="/static/app.js"></script>
-<script>wireFolderPicker();</script>
+<script>
+wireFolderPicker();
+wireRegisterForm();
+</script>
 {% endblock %}

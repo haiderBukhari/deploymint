@@ -426,6 +426,182 @@ function wireFolderPicker() {
   });
 }
 
+function renderDiff(diffText) {
+  const pre = document.createElement("pre");
+  pre.className = "diff";
+  diffText.split("\n").forEach((line) => {
+    const span = document.createElement("span");
+    if (line.startsWith("+++") || line.startsWith("---")) span.className = "diff-file";
+    else if (line.startsWith("@@")) span.className = "diff-hunk";
+    else if (line.startsWith("+")) span.className = "diff-add";
+    else if (line.startsWith("-")) span.className = "diff-del";
+    span.textContent = line + "\n";
+    pre.appendChild(span);
+  });
+  return pre;
+}
+
+function wireFixSuggestions(runId) {
+  // "Suggest a fix" per finding: asks the configured LLM for a minimal patch
+  // to the flagged artifact, shows the real diff (computed server-side with
+  // difflib, not by the model), and on Apply creates a NEW run carrying the
+  // patched artifact and re-runs the security gate against it — the original
+  // run is never mutated, so the audit trail stays intact.
+  // See docs/28-ai-fix.md.
+  document.querySelectorAll(".btn-suggest-fix").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const li = btn.closest("li");
+      const { findingId, file } = btn.dataset;
+
+      let panel = li.querySelector(".fix-panel");
+      if (panel) panel.remove();
+      panel = document.createElement("div");
+      panel.className = "fix-panel";
+      panel.textContent = "Asking the model for a fix…";
+      li.appendChild(panel);
+      btn.disabled = true;
+
+      const r = await fetch(`/api/runs/${runId}/findings/suggest-fix`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ file, finding_id: findingId }),
+      });
+      btn.disabled = false;
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        panel.textContent = `Could not get a suggestion: ${data.detail || r.statusText}`;
+        return;
+      }
+      if (!data.changed) {
+        panel.textContent = "The model returned the file unchanged — no fix suggested.";
+        return;
+      }
+
+      panel.textContent = "";
+      const label = document.createElement("div");
+      label.className = "fix-panel-label";
+      label.textContent = `Proposed change to ${file}`;
+      panel.appendChild(label);
+      panel.appendChild(renderDiff(data.diff));
+
+      const actions = document.createElement("div");
+      actions.className = "finding-actions";
+      const applyBtn = document.createElement("button");
+      applyBtn.type = "button";
+      applyBtn.textContent = "Apply & re-scan";
+      const discardBtn = document.createElement("button");
+      discardBtn.type = "button";
+      discardBtn.className = "btn-cta-secondary";
+      discardBtn.textContent = "Discard";
+      actions.append(applyBtn, discardBtn);
+      panel.appendChild(actions);
+
+      discardBtn.addEventListener("click", () => panel.remove());
+      applyBtn.addEventListener("click", async () => {
+        applyBtn.disabled = true;
+        applyBtn.textContent = "Applying…";
+        const ar = await fetch(`/api/runs/${runId}/findings/apply-fix`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ file, patched_content: data.suggested_content }),
+        });
+        const ad = await ar.json().catch(() => ({}));
+        actions.remove();
+        const result = document.createElement("div");
+        result.className = ad.passed ? "fix-result-ok" : "fix-result-fail";
+        if (!ar.ok) {
+          result.textContent = `Apply failed: ${ad.detail || ar.statusText}`;
+        } else {
+          result.innerHTML =
+            `Re-scanned as <strong>${ad.status}</strong> ` +
+            `(${ad.findings.length} finding(s) remaining). ` +
+            `<a href="/runs/${ad.run_id}">Open the new run →</a>`;
+        }
+        panel.appendChild(result);
+      });
+    });
+  });
+}
+
+function wireRegisterForm() {
+  // Submits via fetch instead of a plain HTML POST so a duplicate-name 409
+  // can offer a rename modal instead of reloading to a dead-end error page
+  // that loses the folder/cloud-target selections. See docs/27-rename-modal.md.
+  const form = document.getElementById("register-form");
+  if (!form) return;
+
+  function showError(message) {
+    let el = document.getElementById("register-error");
+    if (!el) {
+      el = document.createElement("p");
+      el.id = "register-error";
+      el.className = "error";
+      el.style.marginTop = "0.6rem";
+      el.style.marginBottom = "0";
+      form.insertAdjacentElement("afterend", el);
+    }
+    el.textContent = message;
+  }
+
+  function closeModal(overlay) {
+    overlay.remove();
+  }
+
+  function showRenameModal(message, attemptedName) {
+    const overlay = document.createElement("div");
+    overlay.className = "modal-overlay";
+    overlay.innerHTML = `
+      <div class="modal" role="dialog" aria-modal="true">
+        <div class="modal-title">That name is taken</div>
+        <p class="muted">${message}</p>
+        <label class="form-step-label" for="modal-rename-input">New name</label>
+        <input type="text" id="modal-rename-input" value="${attemptedName}-2">
+        <div class="modal-actions">
+          <button type="button" id="modal-cancel" class="btn-cta-secondary">Cancel</button>
+          <button type="button" id="modal-confirm">Use this name</button>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+    const input = overlay.querySelector("#modal-rename-input");
+    input.focus();
+    input.select();
+    overlay.querySelector("#modal-cancel").addEventListener("click", () => closeModal(overlay));
+    overlay.addEventListener("click", (e) => { if (e.target === overlay) closeModal(overlay); });
+    overlay.querySelector("#modal-confirm").addEventListener("click", () => {
+      const newName = input.value.trim();
+      closeModal(overlay);
+      if (newName) submit(newName);
+    });
+  }
+
+  async function submit(overrideName) {
+    const fd = new FormData(form);
+    if (overrideName) fd.set("name", overrideName);
+    const r = await fetch(form.action, {
+      method: "POST",
+      headers: { "X-Requested-With": "fetch" },
+      body: fd,
+    });
+    const data = await r.json().catch(() => ({}));
+    if (r.ok && data.redirect) {
+      location.href = data.redirect;
+      return;
+    }
+    if (r.status === 409) {
+      showRenameModal(data.error || "That name is already registered.", fd.get("name"));
+      return;
+    }
+    showError(data.error || "Something went wrong registering that project.");
+  }
+
+  form.addEventListener("submit", (e) => {
+    e.preventDefault();
+    const existing = document.getElementById("register-error");
+    if (existing) existing.remove();
+    submit();
+  });
+}
+
 function wireCostForm() {
   const form = document.getElementById("cost-form");
   if (!form) return;

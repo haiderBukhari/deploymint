@@ -84,6 +84,46 @@ def test_register_via_form_rejects_an_all_punctuation_name(client, sample_repo):
     assert r.status_code == 400
 
 
+def _ajax_register(client, **data):
+    return client.post(
+        "/projects/register", data=data,
+        headers={"X-Requested-With": "fetch"}, follow_redirects=False)
+
+
+def test_register_via_fetch_returns_json_on_success(client, sample_repo):
+    """app.js's wireRegisterForm() submits with this header specifically so
+    a duplicate-name 409 can show a rename modal instead of a dead-end page
+    reload. See docs/27-rename-modal.md."""
+    r = _ajax_register(client, name="fetch-registered", repo_path=str(sample_repo))
+    assert r.status_code == 201
+    assert r.json()["redirect"].startswith("/projects/")
+
+
+def test_register_via_fetch_returns_json_400_on_bad_name(client, sample_repo):
+    r = _ajax_register(client, name="---", repo_path=str(sample_repo))
+    assert r.status_code == 400
+    assert "error" in r.json()
+
+
+def test_register_via_fetch_returns_json_409_on_duplicate_name(client, sample_repo):
+    first = _ajax_register(client, name="dup-app", repo_path=str(sample_repo))
+    assert first.status_code == 201
+
+    second = _ajax_register(client, name="dup-app", repo_path=str(sample_repo))
+    assert second.status_code == 409
+    assert "already exists" in second.json()["error"]
+
+
+def test_register_via_plain_form_post_is_unaffected_by_the_fetch_path(client, sample_repo):
+    """No X-Requested-With header at all — the original non-JS form
+    submission still redirects exactly like before."""
+    r = client.post("/projects/register", data={
+        "name": "plain-form-app", "repo_path": str(sample_repo)},
+        follow_redirects=False)
+    assert r.status_code == 303
+    assert r.headers["location"].startswith("/projects/")
+
+
 def test_project_page_renders(client, registered_project):
     r = client.get(f"/projects/{registered_project['id']}")
     assert r.status_code == 200
