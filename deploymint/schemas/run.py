@@ -5,9 +5,28 @@ from pydantic import BaseModel, computed_field
 
 RunStatus = Literal["pending", "running", "success", "failed", "blocked", "cancelled"]
 
-# claude-opus-5 pricing: $5/1M input, $25/1M output. Update if the model changes.
-_INPUT_PER_TOKEN = 5e-6
-_OUTPUT_PER_TOKEN = 25e-6
+# Per-1M-token pricing (input, output) in USD, keyed by model prefix — a run's
+# actual model_used decides which row applies, so switching providers (e.g.
+# DEPLOYMINT_LLM_PROVIDER=openai) doesn't silently keep pricing a completely
+# different model's tokens. Falls back to claude-opus-5's rate for anything
+# unrecognized (a local/self-hosted model, or a new model not added here yet)
+# rather than guessing — see docs/17-pending-work.md §17.6.
+_PRICING_PER_1M = {
+    "claude-opus-5": (5.0, 25.0),
+    "gpt-4o-mini": (0.15, 0.60),
+    "gpt-4o": (2.50, 10.0),
+    "gpt-5": (5.0, 15.0),
+}
+_DEFAULT_PRICING = _PRICING_PER_1M["claude-opus-5"]
+
+
+def _pricing_for(model: str | None) -> tuple[float, float]:
+    if not model:
+        return _DEFAULT_PRICING
+    for prefix, rates in _PRICING_PER_1M.items():
+        if model.startswith(prefix):
+            return rates
+    return _DEFAULT_PRICING
 
 
 class RunCreate(BaseModel):
@@ -45,7 +64,8 @@ class RunRead(BaseModel):
     def llm_cost_usd(self) -> float | None:
         if self.input_tokens is None:
             return None
+        input_rate, output_rate = _pricing_for(self.model_used)
         return round(
-            self.input_tokens * _INPUT_PER_TOKEN
-            + (self.output_tokens or 0) * _OUTPUT_PER_TOKEN, 4,
+            self.input_tokens * (input_rate / 1e6)
+            + (self.output_tokens or 0) * (output_rate / 1e6), 4,
         )
