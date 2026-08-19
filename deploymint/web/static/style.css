@@ -430,6 +430,14 @@ tr:last-child td { border-bottom: none; }
   word-break: break-all;
   border: 1px solid var(--border);
 }
+/* Full-width artifact preview: generated code needs horizontal room, so
+   don't wrap mid-token — scroll instead, the way any code viewer does. */
+.artifact-preview-wide {
+  max-height: 520px;
+  white-space: pre;
+  word-break: normal;
+  overflow: auto;
+}
 .hl-kw { color: #7ee2b8; font-weight: 600; }
 .hl-key { color: #7fb3ff; }
 .hl-comment { color: #8b949e; font-style: italic; }
@@ -446,6 +454,10 @@ tr:last-child td { border-bottom: none; }
   white-space: pre-wrap;
   border: 1px solid var(--border);
 }
+/* Full-width Terminal (its own card above Artifacts, not a half of .split) —
+   live build/deploy output is the thing you actually watch, so it gets the
+   full page width and more vertical room. */
+.terminal-wide { height: 420px; }
 
 .findings { list-style: none; padding: 0; }
 .findings li { padding: 0.5rem 0; border-bottom: 1px solid var(--border); font-size: 0.88rem; }
