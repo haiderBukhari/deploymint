@@ -26,8 +26,16 @@ NODES = ["architect", "smith", "warden", "redteam", "execution", "oracle", "fino
 @router.get("/", response_class=HTMLResponse)
 def index(request: Request, db: Session = Depends(get_db)):
     projects = db.query(Project).order_by(Project.created_at.desc()).all()
+    # One extra small query per project (dashboard-scale, not a hot path) —
+    # gives each card a last-run status/time instead of just a bare name, so
+    # the landing page actually tells you something before you click in.
+    latest_runs = {
+        p.id: db.query(Run).filter(Run.project_id == p.id)
+                 .order_by(Run.created_at.desc()).first()
+        for p in projects
+    }
     return templates.TemplateResponse(
-        request, "index.html", {"projects": projects})
+        request, "index.html", {"projects": projects, "latest_runs": latest_runs})
 
 
 @router.post("/projects/register")

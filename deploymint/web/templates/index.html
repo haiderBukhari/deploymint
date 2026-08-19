@@ -21,18 +21,31 @@
   {% if error %}<p class="error" style="margin-bottom:0;">{{ error }}</p>{% endif %}
 </div>
 
+{% if projects %}
 <div class="grid">
   {% for p in projects %}
+  {% set last_run = latest_runs.get(p.id) if latest_runs else none %}
   <a class="card project-card" href="/projects/{{ p.id }}">
-    <div class="project-name">{{ p.name }}</div>
+    <div class="project-card-top">
+      <div class="project-name">{{ p.name }}</div>
+      {% if last_run %}<span class="status status-{{ last_run.status }}">{{ last_run.status }}</span>{% endif %}
+    </div>
     <div class="badges">
       {% if p.language %}<span class="badge">{{ p.language }}</span>{% endif %}
       {% if p.framework %}<span class="badge">{{ p.framework }}</span>{% endif %}
     </div>
-    <div class="muted">{{ p.repo_path }}</div>
+    <div class="muted project-card-path">{{ p.repo_path }}</div>
+    <div class="muted project-card-lastrun">
+      {% if last_run %}Last run {{ last_run.created_at.strftime('%b %-d, %H:%M') }}{% else %}Never deployed{% endif %}
+    </div>
   </a>
-  {% else %}
-  <p class="muted">No projects registered yet.</p>
   {% endfor %}
 </div>
+{% else %}
+<div class="card empty-state">
+  <div class="empty-icon">📦</div>
+  <div class="empty-title">No projects registered yet</div>
+  <div class="empty-hint">Register a repo above to generate its Dockerfile, Kubernetes manifests, and the rest of the pipeline.</div>
+</div>
+{% endif %}
 {% endblock %}
