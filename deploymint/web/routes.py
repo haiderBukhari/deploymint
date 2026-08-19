@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from deploymint.api.costs import _sample_export_by_service
 from deploymint.core.naming import slugify
-from deploymint.core.sandbox import SandboxError, validate_repo_path
+from deploymint.core.sandbox import SandboxError, list_workspace_dirs, validate_repo_path
 from deploymint.db.database import get_db
 from deploymint.db.models import Project, Run
 from deploymint.runner.manager import start_run
@@ -42,7 +42,9 @@ def dashboard(request: Request, db: Session = Depends(get_db)):
         for p in projects
     }
     return templates.TemplateResponse(
-        request, "dashboard.html", {"projects": projects, "latest_runs": latest_runs})
+        request, "dashboard.html",
+        {"projects": projects, "latest_runs": latest_runs,
+         "workspace_dirs": list_workspace_dirs()})
 
 
 @router.post("/projects/register")
@@ -51,11 +53,14 @@ def register_project_form(
     cloud_provider: str = Form("aws"), db: Session = Depends(get_db),
 ):
     projects = db.query(Project).order_by(Project.created_at.desc()).all()
+    workspace_dirs = list_workspace_dirs()
     try:
         path = validate_repo_path(repo_path)
     except SandboxError as e:
         return templates.TemplateResponse(
-            request, "dashboard.html", {"projects": projects, "error": str(e)}, status_code=400)
+            request, "dashboard.html",
+            {"projects": projects, "workspace_dirs": workspace_dirs, "error": str(e)},
+            status_code=400)
 
     # Same sanitization the JSON API's ProjectCreate applies (core/naming.py)
     # — this form used to skip it entirely, so a name like "bew proj" would
@@ -65,12 +70,15 @@ def register_project_form(
         name = slugify(name)
     except ValueError as e:
         return templates.TemplateResponse(
-            request, "dashboard.html", {"projects": projects, "error": str(e)}, status_code=400)
+            request, "dashboard.html",
+            {"projects": projects, "workspace_dirs": workspace_dirs, "error": str(e)},
+            status_code=400)
 
     if db.query(Project).filter_by(name=name).first():
         return templates.TemplateResponse(
             request, "dashboard.html",
-            {"projects": projects, "error": f"project '{name}' already exists"},
+            {"projects": projects, "workspace_dirs": workspace_dirs,
+             "error": f"project '{name}' already exists"},
             status_code=409)
 
     if cloud_provider not in ("aws", "gcp", "azure"):

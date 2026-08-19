@@ -131,6 +131,22 @@ input[type="text"] {
   border-radius: 6px;
   font-size: 0.9rem;
 }
+
+/* --- Dashboard registration: a 3-step journey, not one flat row --- */
+.dashboard-register-form { align-items: flex-end; }
+.form-step { flex: 1 1 220px; min-width: 180px; }
+.form-step-label {
+  display: block;
+  font-size: var(--text-xs);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--muted);
+  margin-bottom: var(--sp-1);
+}
+.form-step select, .form-step input[type="text"] { width: 100%; }
+.form-step-hint { font-size: var(--text-xs); margin: var(--sp-1) 0 0; }
+.register-submit { flex: 0 0 auto; height: 38px; }
 input[type="text"]:focus { outline: 2px solid var(--mint); outline-offset: -1px; }
 
 select {
@@ -407,11 +423,10 @@ tr:last-child td { border-bottom: none; }
   padding: var(--sp-7) var(--sp-6) var(--sp-6);
   overflow: hidden;
 }
-/* White theme: a clean, light hero instead of a heavy dark gradient block —
-   consistent with the rest of the app's white palette rather than the one
-   loud exception to it. */
+/* White theme: plain white, no tint/gradient — consistent with the rest of
+   the app's white palette rather than any exception to it. */
 .hero-white {
-  background: linear-gradient(180deg, var(--mint-soft) 0%, var(--bg) 65%);
+  background: var(--bg);
   color: var(--text);
   border-bottom: 1px solid var(--border);
 }
@@ -431,11 +446,12 @@ tr:last-child td { border-bottom: none; }
 }
 .hero-title {
   color: var(--text);
-  font-size: clamp(1.8rem, 4vw, var(--text-2xl));
-  line-height: 1.15;
-  letter-spacing: -0.02em;
+  font-size: clamp(2.4rem, 6vw, 4rem);
+  font-weight: 800;
+  line-height: 1.08;
+  letter-spacing: -0.03em;
   margin: 0 auto var(--sp-4);
-  max-width: 720px;
+  max-width: 820px;
 }
 .hero-subtitle {
   font-size: var(--text-md);

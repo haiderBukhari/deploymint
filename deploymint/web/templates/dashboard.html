@@ -2,23 +2,45 @@
 {% block title %}Dashboard · DeployMint{% endblock %}
 {% block content %}
 <h1>Dashboard</h1>
-<p class="muted" style="margin-top:-0.5rem;">Register a repo under <code>./projects</code>, then deploy it — Dockerfile, Kubernetes manifests, and the rest of the pipeline, generated automatically.</p>
+<p class="muted" style="margin-top:-0.5rem;">Three steps to your first deploy — pick a folder, name it, register.</p>
 
 <div class="card">
   <div class="section-label">Register a project</div>
-  <form class="form" method="post" action="/projects/register">
-    <input type="text" name="name" placeholder="project-name (lowercase, hyphens)" required
-           title="Used as a Docker image tag and Kubernetes/Terraform resource name — spaces and uppercase are auto-converted to hyphens.">
+  <form class="form dashboard-register-form" method="post" action="/projects/register" id="register-form">
+    <div class="form-step">
+      <label class="form-step-label" for="folder-select">1. Pick a folder</label>
+      {% if workspace_dirs %}
+      <select name="repo_path" id="folder-select" required
+              title="Only folders actually present under ./projects show up here.">
+        <option value="" disabled selected>Choose a folder in ./projects…</option>
+        {% for d in workspace_dirs %}
+        <option value="/workspace/{{ d }}" data-name="{{ d }}">{{ d }}</option>
+        {% endfor %}
+      </select>
+      {% else %}
+      <input type="text" name="repo_path" placeholder="/workspace/my-app" required>
+      <p class="muted form-step-hint">No folders found under <code>./projects</code> yet — copy or symlink your repo there first, then reload this page.</p>
+      {% endif %}
+    </div>
 
-    <input type="text" name="repo_path" placeholder="/workspace/my-app" required>
-    <select name="cloud_provider" title="Which cloud's Terraform module to generate (ECR/EKS, Artifact Registry/GKE, or ACR/AKS)">
-      <option value="aws" selected>AWS (ECR + optional EKS)</option>
-      <option value="gcp">GCP (Artifact Registry + optional GKE)</option>
-      <option value="azure">Azure (ACR + optional AKS)</option>
-    </select>
-    <button type="submit">Register</button>
+    <div class="form-step">
+      <label class="form-step-label" for="name-input">2. Name it</label>
+      <input type="text" name="name" id="name-input" placeholder="project-name (lowercase, hyphens)" required
+             title="Used as a Docker image tag and Kubernetes/Terraform resource name — spaces and uppercase are auto-converted to hyphens.">
+    </div>
+
+    <div class="form-step">
+      <label class="form-step-label" for="cloud-select">3. Cloud target</label>
+      <select name="cloud_provider" id="cloud-select" title="Which cloud's Terraform module to generate (ECR/EKS, Artifact Registry/GKE, or ACR/AKS)">
+        <option value="aws" selected>AWS (ECR + optional EKS)</option>
+        <option value="gcp">GCP (Artifact Registry + optional GKE)</option>
+        <option value="azure">Azure (ACR + optional AKS)</option>
+      </select>
+    </div>
+
+    <button type="submit" class="register-submit">Register →</button>
   </form>
-  {% if error %}<p class="error" style="margin-bottom:0;">{{ error }}</p>{% endif %}
+  {% if error %}<p class="error" style="margin-bottom:0; margin-top:0.6rem;">{{ error }}</p>{% endif %}
 </div>
 
 {% if projects %}
@@ -48,4 +70,7 @@
   <div class="empty-hint">Register a repo above to generate its Dockerfile, Kubernetes manifests, and the rest of the pipeline.</div>
 </div>
 {% endif %}
+
+<script src="/static/app.js"></script>
+<script>wireFolderPicker();</script>
 {% endblock %}

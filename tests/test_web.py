@@ -37,6 +37,22 @@ def test_dashboard_page_lists_a_registered_project(client, registered_project):
     assert registered_project["name"] in r.text
 
 
+def test_dashboard_shows_a_folder_picker_for_real_workspace_dirs(client, sample_repo):
+    """A browser <input type=file webkitdirectory> can't hand JS an absolute
+    path at all, so the picker is server-driven: a <select> listing what's
+    actually mounted under ./projects. See docs/25-folder-picker.md."""
+    r = client.get("/dashboard")
+    assert 'id="folder-select"' in r.text
+    assert f'value="/workspace/{sample_repo.name}"' in r.text
+    assert 'name="repo_path"' in r.text
+
+
+def test_dashboard_falls_back_to_a_text_input_with_no_workspace_dirs(client):
+    r = client.get("/dashboard")
+    assert 'id="folder-select"' not in r.text
+    assert 'placeholder="/workspace/my-app"' in r.text
+
+
 def test_register_via_form_creates_a_project(client, sample_repo):
     r = client.post("/projects/register", data={
         "name": "form-registered", "repo_path": str(sample_repo)},

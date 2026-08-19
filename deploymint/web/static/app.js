@@ -405,6 +405,27 @@ function wireCloudDeploy(runId) {
   });
 }
 
+function wireFolderPicker() {
+  // A browser folder-select input (<input type=file webkitdirectory>) can't
+  // give JS the absolute filesystem path of what was picked at all — that's
+  // a deliberate browser sandboxing limit, not something a workaround fixes.
+  // So the picker is server-driven instead: dashboard.html renders a
+  // <select> from core.sandbox.list_workspace_dirs() (real folders actually
+  // present under ./projects), and this just auto-fills the name field from
+  // whichever one gets picked — one less thing to type, not a required step.
+  const select = document.getElementById("folder-select");
+  const nameInput = document.getElementById("name-input");
+  if (!select || !nameInput) return;
+
+  select.addEventListener("change", () => {
+    if (nameInput.value.trim()) return; // don't clobber a name the user already typed
+    const opt = select.options[select.selectedIndex];
+    const folder = opt && opt.dataset.name;
+    if (!folder) return;
+    nameInput.value = folder.toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "");
+  });
+}
+
 function wireCostForm() {
   const form = document.getElementById("cost-form");
   if (!form) return;

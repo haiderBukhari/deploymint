@@ -29,6 +29,24 @@ def validate_repo_path(raw: str) -> Path:
     return p
 
 
+def list_workspace_dirs() -> list[str]:
+    """Top-level directory names under the workspace mount — lets the
+    registration form offer a real folder picker (a <select> of what's
+    actually there) instead of asking the user to type an exact
+    /workspace/<name> path by hand. See docs/25-folder-picker.md.
+
+    A browser <input type=file webkitdirectory> picker can't give JS the
+    absolute filesystem path of a selected folder at all (a deliberate
+    browser sandboxing limit) — so the picker has to be server-driven: list
+    what's really mounted, not what the browser thinks a local folder is."""
+    root = get_settings().workspace_root
+    if not root.is_dir():
+        return []
+    return sorted(
+        p.name for p in root.iterdir() if p.is_dir() and not p.name.startswith(".")
+    )
+
+
 def safe_join(root: Path, relative: str) -> Path:
     """Join and assert the result stays inside root."""
     candidate = (root / relative).resolve()
