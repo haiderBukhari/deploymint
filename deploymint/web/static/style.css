@@ -162,6 +162,11 @@ textarea { font-family: "SF Mono", Menlo, monospace; font-size: 0.8rem; resize: 
 
 .muted { color: var(--muted); }
 .error { color: var(--red); }
+.error-list { list-style: none; padding: 0; margin: 0; }
+.error-list li { padding: 0.4rem 0; border-bottom: 1px solid var(--border); font-size: 0.88rem; }
+.error-list li:last-child { border-bottom: none; }
+.badge-ok { background: var(--mint-soft); border-color: var(--mint); color: var(--mint); }
+.badge-fail { background: var(--red-soft); border-color: var(--red); color: var(--red); }
 .reasoning {
   font-style: italic;
   color: var(--text);

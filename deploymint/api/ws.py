@@ -28,43 +28,55 @@ async def stream_run(ws: WebSocket, run_id: str):
     except Exception:
         since = 0
 
-    with Session() as db:
-        rows = (db.query(Event).filter(Event.run_id == run_id, Event.seq > since)
-                .order_by(Event.seq).all())
-        for r in rows:
-            await ws.send_json({"seq": r.seq, "type": r.type,
-                                "payload": r.payload, "ts": r.ts.isoformat()})
-        run = db.get(Run, run_id)
-
-    if run is None:
-        await ws.close(code=4404)
-        return
-
-    if run.status in TERMINAL:
-        await ws.send_json({"seq": -1, "type": "run.end",
-                            "payload": {"status": run.status}})
-        await ws.close()
-        return
-
+    # Subscribe to the live bus BEFORE querying the DB for replay. Doing it
+    # in the other order — query, then subscribe — leaves a window where an
+    # event emitted in between lands in neither the already-fetched replay
+    # batch nor the not-yet-subscribed live queue: silently lost. Subscribing
+    # first means the worst case is an event landing in *both*, which the
+    # max_sent guard below dedupes instead of dropping anything.
     bus = registry.get(run_id)
-    if not bus:
-        # The run finished between the DB read above and here — nothing left
-        # to tail, and its status was already sent as part of the replay.
-        await ws.close()
-        return
+    queue = bus.subscribe() if bus else None
 
-    queue = bus.subscribe()
     try:
+        max_sent = since
+        with Session() as db:
+            rows = (db.query(Event).filter(Event.run_id == run_id, Event.seq > since)
+                    .order_by(Event.seq).all())
+            for r in rows:
+                await ws.send_json({"seq": r.seq, "type": r.type,
+                                    "payload": r.payload, "ts": r.ts.isoformat()})
+                max_sent = max(max_sent, r.seq)
+            run = db.get(Run, run_id)
+
+        if run is None:
+            await ws.close(code=4404)
+            return
+
+        if run.status in TERMINAL:
+            await ws.send_json({"seq": -1, "type": "run.end",
+                                "payload": {"status": run.status}})
+            await ws.close()
+            return
+
+        if queue is None:
+            # The run finished before we ever found a live bus to subscribe
+            # to — nothing left to tail, and its status was already sent as
+            # part of the replay above.
+            await ws.close()
+            return
+
         while True:
             evt = await queue.get()
             if evt.get("type") == "__end__":
                 break
-            if evt["seq"] > since:
+            if evt["seq"] > max_sent:
                 await ws.send_json(evt)
+                max_sent = evt["seq"]
     except WebSocketDisconnect:
         pass
     finally:
-        bus.unsubscribe(queue)
+        if queue is not None:
+            bus.unsubscribe(queue)
         try:
             await ws.close()
         except Exception:

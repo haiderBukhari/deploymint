@@ -64,6 +64,43 @@ def test_ws_since_filters_out_already_seen_events(client, registered_project):
     assert len(replayed) < len(all_events)
 
 
+def test_connecting_at_run_start_matches_a_full_post_hoc_replay(client, registered_project):
+    """Regression test for a real race in stream_run: subscribing to the live
+    bus AFTER querying the DB for replay left a window where an event
+    emitted in between was neither in the already-fetched replay batch nor
+    the not-yet-subscribed live queue — silently dropped. Subscribing before
+    querying (and deduping on seq) means watching a run from the very start
+    must see the exact same sequence of events a full replay after the run
+    finishes does — no gaps, no duplicates."""
+    pid = registered_project["id"]
+    run_id = client.post(
+        f"/api/projects/{pid}/runs", json={"skip_deploy": True}
+    ).json()["run_id"]
+
+    live_seqs = []
+    with client.websocket_connect(f"/ws/runs/{run_id}") as ws:
+        ws.send_json({"since": 0})
+        while True:
+            msg = ws.receive_json()
+            if msg["type"] == "run.end":
+                break
+            live_seqs.append(msg["seq"])
+
+    _wait_for_terminal(client, run_id)
+
+    with client.websocket_connect(f"/ws/runs/{run_id}") as ws:
+        ws.send_json({"since": 0})
+        replay_seqs = []
+        while True:
+            msg = ws.receive_json()
+            if msg["type"] == "run.end":
+                break
+            replay_seqs.append(msg["seq"])
+
+    assert live_seqs == replay_seqs
+    assert len(live_seqs) == len(set(live_seqs)), "no event should be delivered twice"
+
+
 def test_ws_on_unknown_run_closes(client):
     try:
         with client.websocket_connect("/ws/runs/run_doesnotexist") as ws:

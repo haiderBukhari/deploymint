@@ -54,6 +54,7 @@ NAV: list[DocPage] = [
     DocPage("20-in-app-docs", "This Docs Viewer", DOCS_DIR / "20-in-app-docs.md"),
     DocPage("21-cloud-deploy", "Cloud Deploy", DOCS_DIR / "21-cloud-deploy.md"),
     DocPage("22-naming", "Project Name Sanitization", DOCS_DIR / "22-naming.md"),
+    DocPage("23-ui-evidence", "UI: Errors + Evidence", DOCS_DIR / "23-ui-evidence.md"),
 ]
 
 _by_slug = {p.slug: p for p in NAV}

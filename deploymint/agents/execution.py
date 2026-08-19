@@ -34,6 +34,7 @@ class ExecutionEngineAgent(BaseAgent):
 
         try:
             await self.emit("execution.stage", stage="build")
+            await self._mark("starting docker build...")
             build_lines: list[str] = []
 
             async def collect(line: str):
@@ -57,11 +58,13 @@ class ExecutionEngineAgent(BaseAgent):
                 cluster = await kube_engine.kind_cluster_name()
                 if cluster:
                     await self.emit("execution.stage", stage="load")
+                    await self._mark(f"loading image into kind cluster {cluster}...")
                     r = await kube_engine.kind_load(image, cluster, **kw)
                     if not r.ok:
                         raise RuntimeError(f"kind load failed: {r.combined[:400]}")
 
                 await self.emit("execution.stage", stage="apply")
+                await self._mark("applying Kubernetes manifests...")
                 r = await kube_engine.apply(
                     [str(art_dir / "k8s-deployment.yaml"), str(art_dir / "k8s-service.yaml")], **kw)
                 dep["kubectl_output"] = r.combined
@@ -69,6 +72,7 @@ class ExecutionEngineAgent(BaseAgent):
                     raise RuntimeError(f"kubectl apply failed: {r.combined[:400]}")
 
                 await self.emit("execution.stage", stage="rollout")
+                await self._mark("waiting for rollout to complete...")
                 r = await kube_engine.rollout_status(name, **kw)
                 if not r.ok:
                     diag = await self._diagnose(name, **kw)
@@ -78,6 +82,7 @@ class ExecutionEngineAgent(BaseAgent):
             else:
                 dep["mode"] = "docker"
                 await self.emit("execution.stage", stage="docker_run")
+                await self._mark("no cluster reachable — starting with docker run...")
                 r = await docker_run.run_container(name, image, port, **kw)
                 if not r.ok:
                     raise RuntimeError(f"docker run failed: {r.combined[:400]}")
@@ -94,6 +99,7 @@ class ExecutionEngineAgent(BaseAgent):
                     raise RuntimeError(f"container never became healthy.\n{logs.combined[-1500:]}")
 
             dep["status"] = "running"
+            await self._mark(f"build+deploy succeeded — image: {image}")
             await self.emit("execution.done", image_tag=image, mode=dep["mode"],
                             pod_name=dep.get("pod_name"), local_url=dep.get("local_url"),
                             status="running")
@@ -101,6 +107,12 @@ class ExecutionEngineAgent(BaseAgent):
 
         except Exception as e:
             dep["status"] = "failed"
+            # Emitted twice, deliberately: as the generic "error" event (which
+            # app.js surfaces on the step itself) AND as an execution.log line
+            # (which lands in the terminal) — a build that fails before
+            # producing any real stdout would otherwise leave the terminal
+            # looking blank with no explanation anywhere on the page.
+            await self._mark(f"execution failed: {str(e)[:300]}")
             await self.emit("error", node=self.name, message=str(e)[:500])
             return {"deployment": dep,
                     "errors": state.get("errors", []) + [f"execution: {str(e)[:500]}"]}
@@ -118,3 +130,10 @@ class ExecutionEngineAgent(BaseAgent):
 
     async def _line(self, line: str, stream: str):
         await self.emit("execution.log", line=line, stream=stream)
+
+    async def _mark(self, message: str) -> None:
+        """A bracketed marker line into the terminal stream, distinct from
+        real subprocess output — so the terminal never *feels* inert even
+        when the underlying docker/kubectl command is quiet, slow to start,
+        or fails before producing any output of its own."""
+        await self.emit("execution.log", line=f"[deploymint] {message}", stream="stdout")

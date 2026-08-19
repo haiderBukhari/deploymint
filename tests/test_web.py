@@ -1,7 +1,18 @@
 """The four server-rendered pages must actually render, and the vendored
 assets (no CDN) must be served. See docs/10-phase-6-finops-ui.md §6.4-6.5."""
 
+import time
 from unittest.mock import patch
+
+
+def _wait_for_status(client, run_id, timeout=30):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        status = client.get(f"/api/runs/{run_id}").json()["status"]
+        if status != "running":
+            return status
+        time.sleep(0.1)
+    raise TimeoutError(f"run {run_id} did not reach a terminal status in {timeout}s")
 
 
 def test_index_page_renders_with_no_projects(client):
@@ -164,6 +175,102 @@ def test_run_page_html_lists_each_finding_only_once(client, registered_project):
 def test_run_page_404s_for_unknown_run(client):
     r = client.get("/runs/run_doesnotexist")
     assert r.status_code == 404
+
+
+def _set_run_fields(run_id, **fields):
+    """Directly patches a Run row's JSONB columns — used to exercise
+    run.html's rendering of deployment/security/errors data without needing
+    a real docker/kubectl execution (that path is covered separately by the
+    slow, infra-gated tests in test_execution.py)."""
+    from deploymint.db.database import get_session_factory
+    from deploymint.db.models import Run
+
+    Session = get_session_factory()
+    with Session() as db:
+        run = db.get(Run, run_id)
+        for k, v in fields.items():
+            setattr(run, k, v)
+        db.commit()
+
+
+def test_run_page_renders_errors_section_for_a_failed_run(client, registered_project):
+    run_id = client.post(
+        f"/api/projects/{registered_project['id']}/runs", json={"skip_deploy": True}
+    ).json()["run_id"]
+    _wait_for_status(client, run_id)
+    _set_run_fields(run_id, status="failed",
+                    errors=["execution: invalid tag 'x y': invalid reference format"])
+
+    r = client.get(f"/runs/{run_id}")
+    assert 'id="run-errors"' in r.text
+    assert "invalid reference format" in r.text
+    assert "<div class=\"section-label\">Errors</div>" in r.text
+
+
+def test_run_page_shows_notes_not_errors_for_a_successful_run_with_a_resilience_note(
+    client, registered_project
+):
+    """Regression test: run.errors also carries benign resilience-path notes
+    (e.g. Smith falling back to the deterministic template because no LLM
+    key is configured) on a run that still succeeded — labeling that as a
+    bright-red 'Error' next to a green success badge would be alarming and
+    misleading. See docs/23-ui-evidence.md."""
+    run_id = client.post(
+        f"/api/projects/{registered_project['id']}/runs", json={"skip_deploy": True}
+    ).json()["run_id"]
+    status = _wait_for_status(client, run_id)
+    assert status == "success"
+
+    run = client.get(f"/api/runs/{run_id}").json()
+    assert run["errors"], "expected the template-fallback resilience note in errors"
+
+    r = client.get(f"/runs/{run_id}")
+    assert 'id="run-errors"' in r.text
+    assert "<div class=\"section-label\">Notes</div>" in r.text
+    assert "<div class=\"section-label\">Errors</div>" not in r.text
+
+
+def test_run_page_omits_errors_section_when_empty(client, registered_project):
+    run_id = client.post(
+        f"/api/projects/{registered_project['id']}/runs", json={"skip_deploy": True}
+    ).json()["run_id"]
+    _wait_for_status(client, run_id)
+    _set_run_fields(run_id, errors=[])
+
+    r = client.get(f"/runs/{run_id}")
+    assert 'id="run-errors"' not in r.text
+
+
+def test_run_page_renders_deployment_evidence_card(client, registered_project):
+    run_id = client.post(
+        f"/api/projects/{registered_project['id']}/runs", json={"skip_deploy": True}
+    ).json()["run_id"]
+    _wait_for_status(client, run_id)
+    _set_run_fields(run_id, deployment={
+        "image_tag": "deploymint/sample:run123", "mode": "docker",
+        "container_id": "abc123def456", "local_url": "http://localhost:32100",
+        "status": "running", "build_log": "Step 1/5 : FROM python:3.11-slim\n...",
+        "kubectl_output": "",
+    })
+
+    r = client.get(f"/runs/{run_id}")
+    assert "Deployment &amp; Evidence" in r.text
+    assert "deploymint/sample:run123" in r.text
+    assert "http://localhost:32100" in r.text
+    assert "Step 1/5" in r.text  # build log present in a <details> block
+    assert "Checkov" in r.text and "OPA" in r.text and "Red Team" in r.text
+
+
+def test_run_page_deployment_card_shows_no_deployment_message_when_skipped(
+    client, registered_project
+):
+    run_id = client.post(
+        f"/api/projects/{registered_project['id']}/runs", json={"skip_deploy": True}
+    ).json()["run_id"]
+    _wait_for_status(client, run_id)
+
+    r = client.get(f"/runs/{run_id}")
+    assert "No deployment for this run" in r.text
 
 
 def test_costs_page_renders_with_breakdown(client):

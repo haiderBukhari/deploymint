@@ -72,12 +72,13 @@ function connectRun(runId, since, initialStatus) {
 
   const term = document.getElementById("terminal");
   let buffer = [];
-  const flush = setInterval(() => {
+  function flushTerminal() {
     if (!term || !buffer.length) return;
     term.insertAdjacentText("beforeend", buffer.join("\n") + "\n");
     term.scrollTop = term.scrollHeight;
     buffer = [];
-  }, 100);
+  }
+  const flush = setInterval(flushTerminal, 100);
 
   ws.onmessage = (e) => {
     const evt = JSON.parse(e.data);
@@ -134,13 +135,35 @@ function connectRun(runId, since, initialStatus) {
         buffer.push(payload.line);
         break;
       case "warden.finding":
-      case "redteam.probe":
         // If the run was already finished on page load, run.security.findings
         // is already server-rendered from the DB — appending these replayed
         // events on top would duplicate every finding. Only append live.
         if (!wasAlreadyTerminal && payload.id) addFinding(payload);
         break;
+      case "redteam.probe":
+        // Unlike warden.finding, a probe payload has no id/severity/message —
+        // just probe_name/result — so it was never rendering via addFinding()
+        // (that check required payload.id, which this event never has).
+        appendStepDetail("redteam", `probe hit: ${payload.probe_name}`);
+        break;
+      case "error":
+        // A generic failure from any agent (execution.py explicitly, or any
+        // agent via graph.py's exception wrapper). Surface it on the failing
+        // step AND in the terminal — a build that fails before producing any
+        // stdout would otherwise leave the terminal looking inertly blank
+        // with no explanation anywhere on the page.
+        if (payload.node) appendStepDetail(payload.node, `⚠ ${payload.message}`);
+        buffer.push(`[error] ${payload.message}`);
+        break;
       case "run.end":
+        // Flush any buffered terminal lines BEFORE clearing the interval.
+        // On an already-finished run, the entire replay (every persisted
+        // event, execution.log included) arrives essentially instantly —
+        // run.end can land well within the first 100ms flush tick, so
+        // without this, clearInterval below discards every buffered line
+        // and the terminal renders permanently blank despite the real
+        // build/deploy output having been sent correctly over the socket.
+        flushTerminal();
         setStatus(payload.status);
         clearInterval(flush);
         ws.close();

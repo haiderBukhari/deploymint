@@ -67,6 +67,19 @@
   <p class="muted" style="margin-top:0.9rem; margin-bottom:0;">Fills in live over the WebSocket connection below; on a finished run it replays instantly from the persisted event log.</p>
 </div>
 
+{% if run.errors %}
+{% set is_failure = run.status in ("failed", "blocked") %}
+<div class="card" id="run-errors">
+  <div class="section-label">{{ "Errors" if is_failure else "Notes" }}</div>
+  {% if not is_failure %}
+  <p class="muted" style="margin-top:-0.3rem;">Non-fatal — the run still succeeded.</p>
+  {% endif %}
+  <ul class="error-list">
+    {% for e in run.errors %}<li class="{{ 'error' if is_failure else 'muted' }}">{{ e }}</li>{% endfor %}
+  </ul>
+</div>
+{% endif %}
+
 <div class="split">
   <div class="card">
     <div class="section-label">Artifacts</div>
@@ -113,6 +126,63 @@
     </ul>
   {% else %}
     <p class="muted">Not scanned yet.</p>
+  {% endif %}
+</div>
+
+<div class="card">
+  <div class="section-label">Deployment &amp; Evidence</div>
+  <p class="muted" style="margin-top:-0.3rem;">
+    What actually ran — not an LLM's word for it. Checkov and OPA are real
+    subprocess scanners; Docker/kubectl output below is the literal command
+    output from this run.
+  </p>
+
+  {% if run.security %}
+  <div class="badges" style="margin-top:0.6rem;">
+    <span class="badge {{ 'badge-ok' if run.security.checkov_ran else 'badge-fail' }}">
+      Checkov {{ 'ran ✓' if run.security.checkov_ran else 'did not run ✗' }}</span>
+    <span class="badge {{ 'badge-ok' if run.security.opa_ran else 'badge-fail' }}">
+      OPA {{ 'ran ✓' if run.security.opa_ran else 'did not run ✗' }}</span>
+    <span class="badge {{ 'badge-ok' if run.security.redteam_ran else 'badge-fail' }}">
+      Red Team {{ 'ran ✓' if run.security.redteam_ran else 'did not run ✗' }}</span>
+  </div>
+  {% endif %}
+
+  {% if run.deployment %}
+  <div class="stat-row">
+    <div class="stat">
+      <div class="stat-value" style="font-size:1rem; word-break:break-all;">{{ run.deployment.image_tag or "—" }}</div>
+      <div class="stat-label">Image tag</div>
+    </div>
+    <div class="stat">
+      <div class="stat-value" style="font-size:1rem;">{{ run.deployment.mode or "—" }}</div>
+      <div class="stat-label">{{ 'Pod' if run.deployment.pod_name else 'Container' }}: {{ run.deployment.pod_name or run.deployment.container_id or "—" }}</div>
+    </div>
+    <div class="stat">
+      <div class="stat-value" style="font-size:1rem;">{{ run.deployment.status or "—" }}</div>
+      <div class="stat-label">Oracle verdict</div>
+    </div>
+  </div>
+  {% if run.deployment.local_url %}
+  <p><a href="{{ run.deployment.local_url }}" target="_blank" rel="noopener">{{ run.deployment.local_url }}</a></p>
+  {% endif %}
+  {% if run.deployment.anomaly_explanation %}
+  <p class="reasoning">{{ run.deployment.anomaly_explanation }}</p>
+  {% endif %}
+  {% if run.deployment.build_log %}
+  <details style="margin-top:0.6rem;">
+    <summary class="muted">Build log ({{ run.deployment.build_log | length }} chars)</summary>
+    <pre class="terminal" style="height:220px; margin-top:0.5rem;">{{ run.deployment.build_log }}</pre>
+  </details>
+  {% endif %}
+  {% if run.deployment.kubectl_output %}
+  <details style="margin-top:0.6rem;">
+    <summary class="muted">kubectl output</summary>
+    <pre class="terminal" style="height:220px; margin-top:0.5rem;">{{ run.deployment.kubectl_output }}</pre>
+  </details>
+  {% endif %}
+  {% else %}
+  <p class="muted">No deployment for this run (skipped, or the pipeline stopped before Execution).</p>
   {% endif %}
 </div>
 
