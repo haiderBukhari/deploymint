@@ -6,6 +6,7 @@ import re
 
 from deploymint.agents.base import BaseAgent
 from deploymint.agents.state import DeployState
+from deploymint.agents.warden import SEVERITY_ORDER
 from deploymint.config import get_settings
 from deploymint.core import llm, prompts
 
@@ -62,14 +63,38 @@ PROBES = [
 LLM_SEVERITY_CAP = {"critical": "high"}
 
 
+def _clamp_llm_severity(raw: object) -> str:
+    """Normalize + clamp an LLM-reported severity.
+
+    Was a raw dict lookup (`LLM_SEVERITY_CAP.get(sev, sev)`): an uppercase
+    "CRITICAL" (or any value outside the Finding.severity Literal) missed the
+    "critical" key, fell through to the raw string, and became an
+    out-of-Literal value that SEVERITY_ORDER can't rank — silently
+    unblockable *and* uncounted by the Warden's threshold check. Now: always
+    normalize case first, then clamp critical -> high, then validate against
+    SEVERITY_ORDER — anything still unrecognized becomes "low" rather than
+    vanishing from the gate. See docs/29-richer-reasoning.md's sibling,
+    docs/32-redteam-fixes.md.
+    """
+    sev = str(raw or "").strip().lower()
+    sev = LLM_SEVERITY_CAP.get(sev, sev)
+    return sev if sev in SEVERITY_ORDER else "low"
+
+
 class RedTeamAgent(BaseAgent):
     name = "redteam"
 
     async def run(self, state: DeployState) -> dict:
         artifacts = state.get("artifacts") or {}
         security = dict(state.get("security") or {"passed": True, "findings": []})
-        blob = "\n".join(str(artifacts.get(k, "")) for k in
-                         ("dockerfile", "k8s_deployment", "k8s_service"))
+        # Previously only dockerfile/k8s_deployment/k8s_service were probed —
+        # Terraform, Ansible, the GitHub Actions workflow, and the ArgoCD
+        # application were generated and written to disk but never
+        # red-teamed at all. See docs/32-redteam-fixes.md.
+        blob = "\n".join(str(artifacts.get(k, "")) for k in (
+            "dockerfile", "k8s_deployment", "k8s_service", "terraform",
+            "ansible_playbook", "github_actions_workflow", "argocd_application",
+        ))
 
         findings = self._deterministic_probes(blob)
         for f in findings:
@@ -119,7 +144,7 @@ class RedTeamAgent(BaseAgent):
         out = []
         for f in data.get("findings", []):
             f = dict(f)
-            f["severity"] = LLM_SEVERITY_CAP.get(f.get("severity"), f.get("severity", "low"))
+            f["severity"] = _clamp_llm_severity(f.get("severity"))
             f["source"] = "redteam"
             f.setdefault("file", "-")
             f.setdefault("remediation", "")
