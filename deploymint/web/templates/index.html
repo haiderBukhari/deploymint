@@ -7,7 +7,9 @@
 <div class="card">
   <div class="section-label">Register a project</div>
   <form class="form" method="post" action="/projects/register">
-    <input type="text" name="name" placeholder="project name" required>
+    <input type="text" name="name" placeholder="project-name (lowercase, hyphens)" required
+           title="Used as a Docker image tag and Kubernetes/Terraform resource name — spaces and uppercase are auto-converted to hyphens.">
+
     <input type="text" name="repo_path" placeholder="/workspace/my-app" required>
     <select name="cloud_provider" title="Which cloud's Terraform module to generate (ECR/EKS, Artifact Registry/GKE, or ACR/AKS)">
       <option value="aws" selected>AWS (ECR + optional EKS)</option>

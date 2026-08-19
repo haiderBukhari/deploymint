@@ -23,6 +23,29 @@ def test_register_via_form_creates_a_project(client, sample_repo):
     assert r.headers["location"].startswith("/projects/")
 
 
+def test_register_via_form_sanitizes_the_name_like_the_json_api_does(client, sample_repo):
+    """Regression test for a real bug (docs/22-naming.md): this form built a
+    Project straight from the raw field, skipping the sanitization
+    ProjectCreate's pydantic validator applies on the JSON API path. A name
+    with a space would reach the DB unchanged and only fail much later, at
+    the Execution stage, as an invalid Docker image tag."""
+    r = client.post("/projects/register", data={
+        "name": "Bew Proj", "repo_path": str(sample_repo)},
+        follow_redirects=False)
+    assert r.status_code == 303
+    project_id = r.headers["location"].rsplit("/", 1)[-1]
+    project = client.get(f"/api/projects/{project_id}").json()
+    assert project["name"] == "bew-proj"
+    assert " " not in project["name"]
+    assert project["name"] == project["name"].lower()
+
+
+def test_register_via_form_rejects_an_all_punctuation_name(client, sample_repo):
+    r = client.post("/projects/register", data={
+        "name": "---", "repo_path": str(sample_repo)})
+    assert r.status_code == 400
+
+
 def test_project_page_renders(client, registered_project):
     r = client.get(f"/projects/{registered_project['id']}")
     assert r.status_code == 200

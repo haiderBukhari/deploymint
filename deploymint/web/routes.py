@@ -9,6 +9,7 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from deploymint.api.costs import _sample_export_by_service
+from deploymint.core.naming import slugify
 from deploymint.core.sandbox import SandboxError, validate_repo_path
 from deploymint.db.database import get_db
 from deploymint.db.models import Project, Run
@@ -38,6 +39,16 @@ def register_project_form(
     try:
         path = validate_repo_path(repo_path)
     except SandboxError as e:
+        return templates.TemplateResponse(
+            request, "index.html", {"projects": projects, "error": str(e)}, status_code=400)
+
+    # Same sanitization the JSON API's ProjectCreate applies (core/naming.py)
+    # — this form used to skip it entirely, so a name like "bew proj" would
+    # sail into the DB and only blow up later, at the Execution stage, as an
+    # "invalid reference format" Docker tag error. See docs/22-naming.md.
+    try:
+        name = slugify(name)
+    except ValueError as e:
         return templates.TemplateResponse(
             request, "index.html", {"projects": projects, "error": str(e)}, status_code=400)
 

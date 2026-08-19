@@ -3,6 +3,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
 
+from deploymint.core.naming import slugify
+
 
 class ProjectCreate(BaseModel):
     name: str = Field(min_length=1, max_length=100)
@@ -12,10 +14,7 @@ class ProjectCreate(BaseModel):
     @field_validator("name")
     @classmethod
     def slug_safe(cls, v: str) -> str:
-        cleaned = "".join(c if c.isalnum() or c in "-_" else "-" for c in v.lower())
-        if not cleaned.strip("-"):
-            raise ValueError("name must contain at least one alphanumeric character")
-        return cleaned
+        return slugify(v)
 
 
 class ProjectRead(BaseModel):
