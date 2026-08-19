@@ -256,6 +256,17 @@ textarea { font-family: "SF Mono", Menlo, monospace; font-size: 0.8rem; resize: 
   margin: 0.75rem 0 0;
   font-size: 0.88rem;
 }
+/* The fuller, multi-paragraph LLM rationale — a real several-paragraph
+   explanation, not squeezed into one <p> the way the short `reasoning`
+   summary above it is. See docs/29-richer-reasoning.md. */
+.reasoning-detail {
+  margin-top: var(--sp-2);
+  font-size: var(--text-sm);
+  color: var(--text);
+  line-height: 1.6;
+}
+.reasoning-detail p { margin: 0 0 var(--sp-3); }
+.reasoning-detail p:last-child { margin-bottom: 0; }
 .back {
   display: inline-flex;
   align-items: center;

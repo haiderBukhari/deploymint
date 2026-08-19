@@ -40,7 +40,16 @@ Schema:
   "dockerignore":   "<full .dockerignore content>",
   "k8s_deployment": "<full Deployment YAML, single document>",
   "k8s_service":    "<full Service YAML, single document>",
-  "reasoning":      "<2-3 sentences on the key choices you made>"
+  "reasoning":      "<2-3 sentences on the key choices you made — a summary, shown up front>",
+  "reasoning_detail": "<the FULL rationale, several paragraphs. Cover: (1) how the
+    repo's actual import graph and critical files (given below) shaped the build
+    stages and what gets copied first for layer caching; (2) any detected
+    microservice or heavily-shared module that affected the container/probe
+    design; (3) at least one alternative you considered and rejected, and why —
+    a different base image, a different multi-stage split, a different probe
+    path; (4) anything about this specific repo (not a generic best practice)
+    that changed a default choice. Write it as markdown paragraphs, not a single
+    run-on sentence — use blank lines between distinct points.>"
 }}
 
 NON-NEGOTIABLE REQUIREMENTS:
@@ -60,6 +69,10 @@ Reference examples of correct output for similar stacks:
 
 Generate the artifacts for THIS repository. The app name is "{project_name}".
 Container port must be {exposed_port}. Entrypoint is "{entrypoint}".
+
+Base your `reasoning_detail` on the actual dependency graph and critical files
+above, not generic Dockerfile advice — reference real file/module names from
+this repository wherever they influenced a decision.
 """
 
 SMITH_REPAIR = """Your previous output failed validation with this error:

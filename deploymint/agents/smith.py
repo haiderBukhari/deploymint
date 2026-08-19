@@ -16,8 +16,35 @@ from deploymint.schemas.artifacts import GeneratedArtifacts
 
 TRIM_KEYS = (
     "language", "framework", "package_manager", "entrypoint", "exposed_port",
-    "python_version", "has_tests", "file_count",
+    "python_version", "has_tests", "file_count", "dockerfile_exists",
 )
+
+# Shared 4000-token ceiling in llm.complete()'s default covered the Dockerfile
+# + both YAML docs + reasoning all at once — richer reasoning needs real room.
+# See docs/29-richer-reasoning.md.
+SMITH_MAX_TOKENS = 8000
+
+# Sending the raw import graph (every file, every edge) would blow the token
+# budget on a large repo for no benefit — Smith only needs enough of it to
+# reason about layer-caching order and which files are load-bearing. This
+# caps it to counts plus the edges that actually touch a critical file.
+_MAX_GRAPH_EDGES = 40
+
+
+def _graph_summary(analysis: dict, critical_files: list[str]) -> dict:
+    graph = analysis.get("graph") or {}
+    nodes = graph.get("nodes") or []
+    links = graph.get("links") or []
+    critical = set(critical_files)
+    touching = [
+        link for link in links
+        if link.get("source") in critical or link.get("target") in critical
+    ][:_MAX_GRAPH_EDGES]
+    return {
+        "total_files": len(nodes),
+        "total_import_edges": len(links),
+        "edges_touching_critical_files": touching,
+    }
 
 
 class ArtifactSmithAgent(BaseAgent):
@@ -68,6 +95,7 @@ class ArtifactSmithAgent(BaseAgent):
                 "generated_by": how,
                 "model_used": s.model if how == "llm" else "none",
                 "reasoning": artifacts.reasoning,
+                "reasoning_detail": artifacts.reasoning_detail,
                 **templates.render_extra_artifacts(
                     analysis, project_name, image, state["run_id"],
                     state.get("cloud_provider", "aws")),
@@ -85,9 +113,16 @@ class ArtifactSmithAgent(BaseAgent):
     async def _generate_llm(
         self, analysis: dict, project_name: str, image: str
     ) -> GeneratedArtifacts:
+        # More critical files, and a compact summary of the import graph
+        # around them — previously Smith never saw the graph/services at
+        # all, so per-file rationale in `reasoning_detail` was impossible to
+        # ask for honestly. See docs/29-richer-reasoning.md.
+        critical_files = (analysis.get("critical_files") or [])[:10]
         trimmed = {k: analysis.get(k) for k in TRIM_KEYS}
         trimmed["dependencies"] = (analysis.get("dependencies") or [])[:30]
-        trimmed["critical_files"] = (analysis.get("critical_files") or [])[:5]
+        trimmed["critical_files"] = critical_files
+        trimmed["services"] = (analysis.get("services") or [])[:10]
+        trimmed["import_graph_summary"] = _graph_summary(analysis, critical_files)
 
         fewshot = format_fewshot(analysis.get("language", ""), analysis.get("framework", ""))
         user = prompts.SMITH_USER.format(
@@ -99,7 +134,8 @@ class ArtifactSmithAgent(BaseAgent):
         )
         system = prompts.SMITH_SYSTEM.format(requirements=prompts.HARD_REQUIREMENTS)
 
-        self._last_raw = await llm.complete(system, user, json_mode=True)
+        self._last_raw = await llm.complete(
+            system, user, json_mode=True, max_tokens=SMITH_MAX_TOKENS)
         data = llm.extract_json(self._last_raw)
         return GeneratedArtifacts(**data)
 
@@ -109,7 +145,7 @@ class ArtifactSmithAgent(BaseAgent):
         user = prompts.SMITH_REPAIR.format(error=error, previous=self._last_raw[:3000])
         raw = await llm.complete(
             prompts.SMITH_SYSTEM.format(requirements=prompts.HARD_REQUIREMENTS),
-            user, json_mode=True,
+            user, json_mode=True, max_tokens=SMITH_MAX_TOKENS,
         )
         self._last_raw = raw
         return GeneratedArtifacts(**llm.extract_json(raw))

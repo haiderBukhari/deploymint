@@ -47,6 +47,14 @@
     {% for f in project.analysis.critical_files %}<code>{{ f }}</code>{% if not loop.last %}, {% endif %}{% endfor %}
   </p>
   {% endif %}
+  {% if project.analysis.cycles %}
+  <p class="error">
+    <strong>Circular import{{ 's' if project.analysis.cycles | length != 1 else '' }} detected:</strong>
+    {% for cycle in project.analysis.cycles %}
+      {% for f in cycle %}<code>{{ f }}</code>{% if not loop.last %} → {% endif %}{% endfor %}{% if not loop.last %}; {% endif %}
+    {% endfor %}
+  </p>
+  {% endif %}
   <div id="depgraph" style="height:320px"
        data-graph='{{ project.analysis.graph | tojson }}'
        data-critical='{{ project.analysis.critical_files | tojson }}'></div>

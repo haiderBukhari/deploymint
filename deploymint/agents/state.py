@@ -20,6 +20,7 @@ class RepoAnalysis(TypedDict):
     has_tests: bool
     dockerfile_exists: bool
     architecture_summary: NotRequired[str]  # LLM-generated plain-English narrative
+    cycles: NotRequired[list[list[str]]]  # each entry is a cycle, as a list of file paths
 
 
 class Artifacts(TypedDict):
@@ -30,6 +31,12 @@ class Artifacts(TypedDict):
     generated_by: Literal["llm", "template"]
     model_used: str
     reasoning: NotRequired[str]  # Claude's own explanation; empty on the template path
+    # A longer, structured version of the above — per-artifact rationale and
+    # what was rejected, not just a 2-3 sentence summary. Added as a new key
+    # rather than widening `reasoning` itself, per this file's frozen-schema
+    # rule — empty on the template path, same as `reasoning`. See
+    # docs/29-richer-reasoning.md.
+    reasoning_detail: NotRequired[str]
     # Always deterministically generated regardless of generated_by — see
     # agents/templates.py's render_extra_artifacts() module docstring for why.
     terraform: NotRequired[str]

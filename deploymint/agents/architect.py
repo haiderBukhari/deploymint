@@ -1,11 +1,14 @@
-"""Architect Agent: deterministic repo analysis. See docs/04-agents-spec.md §4.1."""
+"""Architect Agent: deterministic repo analysis, plus one small optional LLM
+call for a plain-English summary. See docs/04-agents-spec.md §4.1 and
+docs/29-richer-reasoning.md."""
 
+import json
 import sys
 from pathlib import Path
 
 from deploymint.agents.base import BaseAgent
 from deploymint.agents.state import DeployState
-from deploymint.core import repo_scanner
+from deploymint.core import llm, prompts, repo_scanner
 from deploymint.core.graph_builder import (
     build_import_graph,
     find_cycles,
@@ -64,7 +67,11 @@ class ArchitectAgent(BaseAgent):
             "critical_files": critical_files,
             "has_tests": has_tests,
             "dockerfile_exists": dockerfile_exists,
+            # Previously computed then discarded into an error string only —
+            # now persisted so a diagram/summary can reference it directly.
+            "cycles": cycles,
         }
+        analysis["architecture_summary"] = await self._summarize(analysis)
 
         await self.emit(
             "architect.done",
@@ -79,6 +86,26 @@ class ArchitectAgent(BaseAgent):
             result["errors"] = state.get("errors", []) + errors
         return result
 
+    async def _summarize(self, analysis: dict) -> str:
+        """ARCHITECT_SUMMARY_PROMPT existed but was never called from
+        anywhere — the Architect made zero LLM calls, so
+        `analysis["architecture_summary"]` (rendered by project.html) was
+        permanently empty. Never raises: an empty summary just means no
+        caption, not a failed analysis — the deterministic fields above are
+        the actual output this agent is responsible for."""
+        try:
+            compact = {k: v for k, v in analysis.items() if k not in ("graph", "dependencies")}
+            summary = await llm.complete(
+                system="You summarize a codebase's architecture for a developer "
+                       "seeing it for the first time.",
+                user=prompts.ARCHITECT_SUMMARY_PROMPT.format(
+                    analysis_json=json.dumps(compact, indent=2)),
+                max_tokens=200,
+            )
+            return summary.strip()
+        except Exception:
+            return ""
+
 
 def _empty_analysis() -> dict:
     return {
@@ -86,4 +113,5 @@ def _empty_analysis() -> dict:
         "entrypoint": "", "exposed_port": 8000, "python_version": "3.11",
         "file_count": 0, "dependencies": [], "services": [], "graph": {"nodes": [], "links": []},
         "critical_files": [], "has_tests": False, "dockerfile_exists": False,
+        "cycles": [], "architecture_summary": "",
     }

@@ -12,6 +12,7 @@ class GeneratedArtifacts(BaseModel):
     k8s_deployment: str = Field(min_length=20)
     k8s_service: str = Field(min_length=10)
     reasoning: str = ""
+    reasoning_detail: str = ""
 
     @field_validator("dockerfile")
     @classmethod

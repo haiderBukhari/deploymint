@@ -82,6 +82,65 @@ async def test_template_fallback_still_has_a_reasoning_string():
 
 
 @pytest.mark.asyncio
+async def test_reasoning_detail_passes_through():
+    good = (
+        '{"dockerfile":"FROM python:3.11-slim\\nUSER 10001\\nCMD [\\"python\\"]",'
+        '"dockerignore":"","k8s_deployment":"kind: Deployment\\nmetadata:\\n  name: t\\n'
+        "spec:\\n  selector:\\n    matchLabels: {}\\n  template:\\n    metadata: {}\\n"
+        "    spec:\\n      containers:\\n      - name: t\\n"
+        '        image: x","k8s_service":"kind: Service\\nmetadata:\\n  name: t\\n'
+        'spec:\\n  ports: []","reasoning":"short summary",'
+        '"reasoning_detail":"Paragraph one.\\n\\nParagraph two."}'
+    )
+    with patch("deploymint.core.llm.complete", return_value=good):
+        out = await ArtifactSmithAgent().run(dict(BASE))
+    assert out["artifacts"]["reasoning_detail"] == "Paragraph one.\n\nParagraph two."
+
+
+@pytest.mark.asyncio
+async def test_template_fallback_has_empty_reasoning_detail():
+    with patch("deploymint.core.llm.complete", return_value="nope"):
+        out = await ArtifactSmithAgent().run(dict(BASE))
+    assert out["artifacts"]["reasoning_detail"] == ""
+
+
+@pytest.mark.asyncio
+async def test_llm_call_gets_an_explicit_larger_max_tokens():
+    """Previously smith.py passed no max_tokens at all, inheriting
+    llm.complete's default 4000 — shared across the Dockerfile, both YAML
+    docs, and reasoning combined. See docs/29-richer-reasoning.md."""
+    with patch("deploymint.core.llm.complete", return_value="nope") as mock_complete:
+        await ArtifactSmithAgent().run(dict(BASE))
+    _, kwargs = mock_complete.call_args
+    assert kwargs["max_tokens"] > 4000
+
+
+@pytest.mark.asyncio
+async def test_prompt_includes_the_import_graph_and_services_now():
+    """Regression test: TRIM_KEYS used to silently drop `graph`, `services`,
+    and `dockerfile_exists` before the analysis ever reached the model — so
+    asking for per-file rationale was asking for something the model
+    couldn't see. See docs/29-richer-reasoning.md."""
+    analysis = dict(ANALYSIS)
+    analysis["graph"] = {"nodes": [{"id": "app/db.py"}, {"id": "app/routes.py"}],
+                         "links": [{"source": "app/routes.py", "target": "app/db.py"}]}
+    analysis["services"] = [{"name": "web", "path": ".", "port": None}]
+    analysis["dockerfile_exists"] = True
+    analysis["critical_files"] = ["app/db.py"]
+    state = {**BASE, "analysis": analysis}
+
+    with patch("deploymint.core.llm.complete", return_value="nope") as mock_complete:
+        await ArtifactSmithAgent().run(state)
+    # first call, not the last — "nope" fails validation, so the repair
+    # attempt (a second, different call) follows it
+    args, _ = mock_complete.call_args_list[0]
+    user_prompt = args[1]
+    assert "app/db.py" in user_prompt
+    assert "import_graph_summary" in user_prompt
+    assert '"services"' in user_prompt
+
+
+@pytest.mark.asyncio
 async def test_repair_recovers_from_one_bad_attempt():
     bad = '{"dockerfile": "no from instruction here"}'
     good = (
