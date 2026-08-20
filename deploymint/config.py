@@ -51,6 +51,10 @@ class Settings(BaseSettings):
     # misconfiguration checks. Degrades to today's behavior when the trivy
     # binary isn't installed — see core/scanners.py's never-raise contract.
     enable_trivy: bool = True
+    # Pause after the Architect node with status="awaiting_approval", showing
+    # the user the architecture diagram + a plan with editable knobs before
+    # generation proceeds. See docs/33-deploy-lock-and-findings.md.
+    enable_approval_gate: bool = True
 
     # runtime
     max_concurrent_runs: int = 2

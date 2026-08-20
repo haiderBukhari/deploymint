@@ -11,9 +11,13 @@
     <p class="muted" style="margin:0;">Runs the full pipeline: analyze → generate → scan → deploy → watch → estimate cost.</p>
   </div>
   <form method="post" action="/projects/{{ project.id }}/deploy">
-    <button type="submit" class="primary">Deploy</button>
+    <button type="submit" class="primary" id="deploy-btn" {% if active_run %}disabled{% endif %}>Deploy</button>
   </form>
 </div>
+{% if active_run %}
+<p class="muted" id="deploy-lock-reason">A run is already {{ active_run.status }} —
+  see <a href="/runs/{{ active_run.id }}">progress</a>.</p>
+{% endif %}
 
 {% if project.analysis %}
 <div class="card">
@@ -82,5 +86,13 @@
 
 <script src="/static/vendor/cytoscape.min.js"></script>
 <script src="/static/app.js"></script>
-<script>renderDepGraph();</script>
+<script>
+renderDepGraph();
+{% if active_run %}
+// Re-enables the Deploy button with no manual polling: connectRun() already
+// reloads the page once the run it's watching reaches a terminal status
+// (see app.js), and a reload here re-evaluates active_run server-side.
+connectRun("{{ active_run.id }}", 0, "{{ active_run.status }}");
+{% endif %}
+</script>
 {% endblock %}

@@ -66,6 +66,11 @@ class SecurityWardenAgent(BaseAgent):
         for f in findings:
             await self.emit("warden.finding", **f)
 
+        # Computed once, up front, so both the fail-closed and normal-path
+        # reports carry it — the run page's posture summary (docs/33) needs
+        # it regardless of which branch below returns.
+        counts = {lvl: sum(1 for f in findings if f["severity"] == lvl) for lvl in SEVERITY_ORDER}
+
         ran_flags = [checkov_ran, opa_ran] + ([trivy_ran] if s.enable_trivy else [])
         if not any(ran_flags):
             reasons = [f"checkov: {ck_err}", f"opa: {opa_err}"]
@@ -74,7 +79,7 @@ class SecurityWardenAgent(BaseAgent):
             report = {
                 "passed": False, "findings": findings,
                 "checkov_ran": False, "opa_ran": False, "redteam_ran": False,
-                "trivy_ran": False,
+                "trivy_ran": False, "counts": counts,
                 "blocked_reason": "No security scanner available — failing closed. "
                                   + "; ".join(reasons),
             }
@@ -86,11 +91,10 @@ class SecurityWardenAgent(BaseAgent):
         blockers = [f for f in findings if f["severity"] in blocking_levels]
         passed = not blockers
 
-        counts = {lvl: sum(1 for f in findings if f["severity"] == lvl) for lvl in SEVERITY_ORDER}
         report = {
             "passed": passed, "findings": findings,
             "checkov_ran": checkov_ran, "opa_ran": opa_ran, "redteam_ran": False,
-            "trivy_ran": trivy_ran,
+            "trivy_ran": trivy_ran, "counts": counts,
         }
         if not passed:
             top = blockers[0]

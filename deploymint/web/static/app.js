@@ -62,7 +62,10 @@ function connectRun(runId, since, initialStatus) {
   // to THAT would reload forever (each reload reconnects, replays run.end
   // again, reloads again...). Only reload for a run.end that arrives while
   // watching live, i.e. the run was still in progress on page load.
-  const TERMINAL = ["success", "failed", "blocked", "cancelled"];
+  // "awaiting_approval" counts as terminal here too — the graph really did
+  // finish (architect-only), so a replay of its persisted run.end must not
+  // trigger the reload-loop guard below. See docs/33-deploy-lock-and-findings.md.
+  const TERMINAL = ["success", "failed", "blocked", "cancelled", "awaiting_approval"];
   const wasAlreadyTerminal = TERMINAL.includes(initialStatus);
 
   const proto = location.protocol === "https:" ? "wss" : "ws";
@@ -224,19 +227,32 @@ function renderDepGraph(retriesLeft) {
   const edges = (graph.links || []).map((l, i) => ({
     data: { id: `e${i}`, source: l.source, target: l.target },
   }));
+  // Cytoscape's style values are read once at construction, not live — so
+  // CSS custom properties are resolved here to concrete colors rather than
+  // passed through as var(...) strings, which is the actual fix for the
+  // graph staying hardcoded to one palette regardless of the page's theme.
+  const cssVar = (name, fallback) => {
+    const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+    return v || fallback;
+  };
+  const mint = cssVar("--mint", "#0f9d70");
+  const text = cssVar("--text", "#1f2328");
+  const amber = cssVar("--amber", "#9a6700");
+  const border = cssVar("--border", "#d0d7de");
+
   const cy = cytoscape({
     container: el,
     elements: [...nodes, ...edges],
     style: [
       { selector: "node", style: { label: "data(id)", "font-size": 10,
-        "background-color": "#0f9d70", color: "#1f2328", "text-valign": "bottom",
+        "background-color": mint, color: text, "text-valign": "bottom",
         "text-margin-y": 4 } },
       { selector: "node.critical", style: {
-        "background-color": "#9a6700", "border-width": 2, "border-color": "#d4a300",
+        "background-color": amber, "border-width": 2, "border-color": amber,
         "font-weight": "bold",
       } },
-      { selector: "edge", style: { "line-color": "#d0d7de",
-        "target-arrow-color": "#d0d7de", "target-arrow-shape": "triangle",
+      { selector: "edge", style: { "line-color": border,
+        "target-arrow-color": border, "target-arrow-shape": "triangle",
         "curve-style": "bezier", width: 1.5 } },
     ],
     // animate: false is the actual fix for the graph rendering nothing on
@@ -520,6 +536,45 @@ function wireFixSuggestions(runId) {
         panel.appendChild(result);
       });
     });
+  });
+}
+
+function wireApprovePlan(runId) {
+  // Submits the architecture-gate knobs (docs/33-deploy-lock-and-findings.md)
+  // to the approve endpoint, then watches the now-resumed pipeline live —
+  // same disable/fetch/re-enable idiom as wireCloudDeploy() above.
+  const form = document.getElementById("approve-plan-form");
+  if (!form) return;
+  const btn = document.getElementById("approve-plan-btn");
+  const errEl = document.getElementById("approve-plan-error");
+
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    errEl.textContent = "";
+    btn.disabled = true;
+    btn.textContent = "Approving…";
+
+    const data = Object.fromEntries(new FormData(form).entries());
+    data.replicas = parseInt(data.replicas, 10) || 1;
+    data.port = parseInt(data.port, 10) || undefined;
+    data.provision_cluster = false;
+
+    const r = await fetch(`/api/runs/${runId}/approve`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(data),
+    });
+    if (!r.ok) {
+      const body = await r.json().catch(() => ({}));
+      errEl.textContent = body.detail || r.statusText;
+      btn.disabled = false;
+      btn.textContent = "Approve & Generate";
+      return;
+    }
+    // The pipeline is now running for real — reload once so the page
+    // switches out of the awaiting_approval plan view into the live
+    // pipeline timeline, then connectRun() takes over from there.
+    location.reload();
   });
 }
 

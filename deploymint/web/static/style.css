@@ -246,6 +246,9 @@ textarea { font-family: "SF Mono", Menlo, monospace; font-size: 0.8rem; resize: 
 .error-list li:last-child { border-bottom: none; }
 .badge-ok { background: var(--mint-soft); border-color: var(--mint); color: var(--mint); }
 .badge-fail { background: var(--red-soft); border-color: var(--red); color: var(--red); }
+.badge-critical, .badge-high { background: var(--red-soft); border-color: var(--red); color: var(--red); font-weight: 600; }
+.badge-medium { background: var(--amber-soft); border-color: var(--amber); color: var(--amber); }
+.posture-summary { margin: 0.4rem 0 0.7rem; font-size: 0.9rem; }
 .reasoning {
   font-style: italic;
   color: var(--text);

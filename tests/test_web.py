@@ -156,6 +156,51 @@ def test_deploy_button_calls_start_run_and_redirects(client, registered_project)
     mock_start.assert_called_once()
 
 
+def test_project_page_disables_deploy_when_a_run_is_active(client, registered_project):
+    run_id = client.post(
+        f"/api/projects/{registered_project['id']}/runs", json={"skip_deploy": True}
+    ).json()["run_id"]
+    _set_run_fields(run_id, status="running")
+
+    r = client.get(f"/projects/{registered_project['id']}")
+    assert 'id="deploy-btn" disabled' in r.text
+    assert "already running" in r.text
+    assert f"/runs/{run_id}" in r.text
+
+
+def test_project_page_enables_deploy_when_no_run_is_active(client, registered_project):
+    run_id = client.post(
+        f"/api/projects/{registered_project['id']}/runs", json={"skip_deploy": True}
+    ).json()["run_id"]
+    _wait_for_status(client, run_id)
+
+    r = client.get(f"/projects/{registered_project['id']}")
+    assert 'id="deploy-btn" disabled' not in r.text
+    assert 'id="deploy-btn"' in r.text
+
+
+def test_deploy_rejects_a_second_concurrent_run_with_409(client, registered_project):
+    run_id = client.post(
+        f"/api/projects/{registered_project['id']}/runs", json={"skip_deploy": True}
+    ).json()["run_id"]
+    _set_run_fields(run_id, status="running")
+
+    r = client.post(f"/projects/{registered_project['id']}/deploy", follow_redirects=False)
+    assert r.status_code == 409
+    assert "already running" in r.text
+
+
+def test_deploy_allowed_again_once_the_active_run_is_terminal(client, registered_project):
+    run_id = client.post(
+        f"/api/projects/{registered_project['id']}/runs", json={"skip_deploy": True}
+    ).json()["run_id"]
+    _wait_for_status(client, run_id)
+
+    with patch("deploymint.web.routes.start_run", return_value="run_afterward"):
+        r = client.post(f"/projects/{registered_project['id']}/deploy", follow_redirects=False)
+    assert r.status_code == 303
+
+
 def test_run_page_renders(client, registered_project):
     run_id = client.post(
         f"/api/projects/{registered_project['id']}/runs", json={"skip_deploy": True}
@@ -237,6 +282,41 @@ def test_run_page_html_lists_each_finding_only_once(client, registered_project):
     r = client.get(f"/runs/{run_id}")
     first = findings[0]
     assert r.text.count(first["id"]) == 1
+
+
+def test_run_page_shows_critical_high_findings_and_collapses_the_rest(
+    client, registered_project
+):
+    """A run with a handful of critical/high findings alongside 200 low/info
+    ones must show the high-value findings unconditionally and collapse the
+    rest behind one toggle, not dump all 200+ in one flat list."""
+    run_id = client.post(
+        f"/api/projects/{registered_project['id']}/runs", json={"skip_deploy": True}
+    ).json()["run_id"]
+    _wait_for_status(client, run_id)
+
+    findings = [{"id": "CRIT-1", "severity": "critical", "source": "trivy",
+                "file": "-", "message": "bad", "remediation": ""}]
+    findings += [
+        {"id": f"INFO-{i}", "severity": "info", "source": "trivy",
+         "file": "-", "message": f"noise {i}", "remediation": ""}
+        for i in range(50)
+    ]
+    _set_run_fields(run_id, security={
+        "passed": True, "findings": findings, "checkov_ran": True, "opa_ran": True,
+        "redteam_ran": True, "counts": {"critical": 1, "high": 0, "medium": 0,
+                                        "low": 0, "info": 50},
+    })
+
+    r = client.get(f"/runs/{run_id}")
+    assert "CRIT-1" in r.text
+    assert "1 critical" in r.text
+    assert "50 lower-severity finding(s)" in r.text
+    assert r.text.count("INFO-0") == 1
+    # The critical finding must appear before the <details> collapse block
+    # that contains the low/info noise — i.e. it's rendered unconditionally,
+    # not buried inside the collapsed section alongside INFO-0.
+    assert r.text.index("CRIT-1") < r.text.index("INFO-0")
 
 
 def test_run_page_404s_for_unknown_run(client):

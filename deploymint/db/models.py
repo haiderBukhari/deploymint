@@ -42,10 +42,18 @@ class Run(Base):
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True)
     project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"))
+    # Free-text, not an enum: "pending" -> "running" -> a terminal value
+    # ("success"/"failed"/"blocked"/"cancelled"), OR "pending" -> "running"
+    # -> "awaiting_approval" (the architecture approval gate stops here,
+    # see docs/33-deploy-lock-and-findings.md) -> "running" again once
+    # POST /api/runs/{id}/approve resumes the pipeline from Smith.
     status: Mapped[str] = mapped_column(String(20), default="pending", index=True)
     current_node: Mapped[str | None] = mapped_column(String(50))
     trigger: Mapped[str] = mapped_column(String(20), default="api")
     force: Mapped[bool] = mapped_column(Boolean, default=False)
+    # The knobs (replicas/cpu/memory/port/cloud/deploy_mode) a user approved
+    # at the architecture gate — None until/unless that gate is used.
+    approved_plan: Mapped[dict | None] = mapped_column(JSONB)
 
     analysis: Mapped[dict | None] = mapped_column(JSONB)
     artifacts: Mapped[dict | None] = mapped_column(JSONB)

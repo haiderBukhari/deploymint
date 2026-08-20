@@ -53,11 +53,23 @@ async def blocked_node(state: DeployState) -> dict:
     return {"current_node": "blocked"}
 
 
-def build_graph(bus=None, *, skip_deploy: bool = False):
+def build_graph(bus=None, *, skip_deploy: bool = False, stop_after_architect: bool = False):
     s = get_settings()
 
     g = StateGraph(DeployState)
     g.add_node("architect", _wrap(ArchitectAgent(bus)))
+
+    # The architecture approval gate — mirrors skip_deploy exactly: no
+    # downstream nodes are added at all, so there's nothing for the graph to
+    # do after Architect but stop. manager.py reads this back out via
+    # _final_status() to report "awaiting_approval" instead of "failed" (an
+    # architect-only run has no artifacts, which _final_status's last line
+    # would otherwise call a failure). See docs/33-deploy-lock-and-findings.md.
+    if stop_after_architect:
+        g.set_entry_point("architect")
+        g.add_edge("architect", END)
+        return g.compile()
+
     g.add_node("smith", _wrap(ArtifactSmithAgent(bus)))
     g.add_node("warden", _wrap(SecurityWardenAgent(bus)))
     g.add_node("blocked", blocked_node)

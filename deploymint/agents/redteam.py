@@ -112,6 +112,14 @@ class RedTeamAgent(BaseAgent):
 
         security["findings"] = list(security.get("findings", [])) + findings
         security["redteam_ran"] = True
+        # warden.py computes `counts` from its own findings only — recompute
+        # here now that Red Team's findings have been appended, or the run
+        # page's posture summary would silently undercount by however many
+        # findings this agent added. See docs/33-deploy-lock-and-findings.md.
+        security["counts"] = {
+            lvl: sum(1 for f in security["findings"] if f["severity"] == lvl)
+            for lvl in SEVERITY_ORDER
+        }
         criticals = [f for f in findings if f["severity"] == "critical"]
         if criticals:
             security["passed"] = False

@@ -6,6 +6,7 @@ for the next run/fix cycle instead. See docs/30-trivy.md."""
 
 from deploymint.agents.base import BaseAgent
 from deploymint.agents.state import DeployState
+from deploymint.agents.warden import SEVERITY_ORDER
 from deploymint.config import get_settings
 from deploymint.core import scanners
 
@@ -24,6 +25,13 @@ class ImageScanAgent(BaseAgent):
         findings, err = await scanners.run_trivy_image(image_tag)
         security["findings"] = list(security.get("findings", [])) + findings
         security["trivy_image_ran"] = err is None
+        # Recompute now that this agent's findings have been appended — see
+        # redteam.py's identical note; otherwise the posture summary would
+        # silently undercount image-scan findings.
+        security["counts"] = {
+            lvl: sum(1 for f in security["findings"] if f["severity"] == lvl)
+            for lvl in SEVERITY_ORDER
+        }
         for f in findings:
             await self.emit("warden.finding", **f)
 

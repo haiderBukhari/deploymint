@@ -31,6 +31,30 @@ async def test_bad_artifacts_are_blocked(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_counts_reflects_actual_findings(tmp_path):
+    out = await SecurityWardenAgent().run(
+        {"run_id": "run_counts", "repo_path": str(tmp_path), "artifacts": BAD, "errors": []}
+    )
+    sec = out["security"]
+    total = sum(sec["counts"].values())
+    assert total == len(sec["findings"])
+    for lvl in ("critical", "high", "medium", "low", "info"):
+        assert lvl in sec["counts"]
+
+
+@pytest.mark.asyncio
+async def test_counts_present_even_when_failing_closed(tmp_path, monkeypatch):
+    monkeypatch.setattr("shutil.which", lambda name: None)
+    out = await SecurityWardenAgent().run(
+        {"run_id": "run_counts_closed", "repo_path": str(tmp_path), "artifacts": BAD, "errors": []}
+    )
+    sec = out["security"]
+    assert sec["passed"] is False
+    assert isinstance(sec["counts"], dict)
+    assert sum(sec["counts"].values()) == len(sec["findings"])
+
+
+@pytest.mark.asyncio
 async def test_template_output_passes(tmp_path):
     from deploymint.agents import templates
 

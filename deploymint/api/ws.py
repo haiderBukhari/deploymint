@@ -13,7 +13,12 @@ from deploymint.db.database import get_session_factory
 from deploymint.db.models import Event, Run
 
 router = APIRouter()
-TERMINAL = {"success", "failed", "blocked", "cancelled"}
+# "awaiting_approval" belongs here too: the graph itself has genuinely
+# finished (the architect-only run completed), there's nothing left to tail
+# until POST /api/runs/{id}/approve starts a new task — same shape as any
+# other terminal status from this endpoint's perspective. See
+# docs/33-deploy-lock-and-findings.md.
+TERMINAL = {"success", "failed", "blocked", "cancelled", "awaiting_approval"}
 
 
 @router.websocket("/ws/runs/{run_id}")

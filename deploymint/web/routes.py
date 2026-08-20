@@ -9,6 +9,7 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from deploymint.api.costs import _sample_export_by_service
+from deploymint.config import get_settings
 from deploymint.core.artifact_store import FILENAMES as ARTIFACT_FILENAMES
 from deploymint.core.naming import slugify
 from deploymint.core.sandbox import SandboxError, list_workspace_dirs, validate_repo_path
@@ -22,6 +23,13 @@ WEB_DIR = Path(__file__).parent
 templates = Jinja2Templates(directory=str(WEB_DIR / "templates"))
 
 NODES = ["architect", "smith", "warden", "redteam", "execution", "oracle", "finops"]
+
+# A project with a run in one of these statuses is "locked" — the Deploy
+# button stays disabled and a second POST is rejected server-side too. See
+# docs/33-deploy-lock-and-findings.md. "awaiting_approval" is included even
+# though the approval-gate feature (below) is what produces it, so no
+# follow-up patch is needed once that ships.
+ACTIVE_RUN_STATUSES = ("pending", "running", "awaiting_approval")
 
 
 @router.get("/", response_class=HTMLResponse)
@@ -107,8 +115,12 @@ def project_page(request: Request, project_id: int, db: Session = Depends(get_db
         return HTMLResponse("Project not found", status_code=404)
     runs = (db.query(Run).filter(Run.project_id == project_id)
             .order_by(Run.created_at.desc()).limit(20).all())
+    # Deploy button lock: a project with a run still in flight shows a
+    # disabled button + a link to that run instead of a second, silently
+    # concurrent deploy. See docs/33-deploy-lock-and-findings.md.
+    active_run = next((r for r in runs if r.status in ACTIVE_RUN_STATUSES), None)
     return templates.TemplateResponse(
-        request, "project.html", {"project": p, "runs": runs})
+        request, "project.html", {"project": p, "runs": runs, "active_run": active_run})
 
 
 @router.post("/projects/{project_id}/deploy")
@@ -116,7 +128,14 @@ async def deploy_project_form(project_id: int, db: Session = Depends(get_db)):
     p = db.get(Project, project_id)
     if not p:
         return HTMLResponse("Project not found", status_code=404)
-    run_id = await start_run(p, trigger="web")
+    active = (db.query(Run).filter(Run.project_id == project_id,
+                                   Run.status.in_(ACTIVE_RUN_STATUSES)).first())
+    if active:
+        return HTMLResponse(
+            f"A run is already {active.status} for this project — see /runs/{active.id}",
+            status_code=409)
+    run_id = await start_run(
+        p, trigger="web", stop_after_architect=get_settings().enable_approval_gate)
     return RedirectResponse(f"/runs/{run_id}", status_code=303)
 
 
@@ -146,16 +165,36 @@ def _fixable_files(run: Run) -> dict[str, str]:
     return mapping
 
 
+_SEVERITY_ORDER = ("critical", "high", "medium", "low", "info")
+_PROMINENT_SEVERITIES = ("critical", "high")
+
+
+def _split_by_severity(run: Run) -> tuple[list[dict], list[dict]]:
+    """Splits a run's findings into (critical_high, rest) — a real run can
+    return 200+ low/info-severity base-image CVEs alongside a handful of
+    critical/high ones; dumping all of them in one flat list buries the
+    signal. Both lists are sorted critical-first. See
+    docs/33-deploy-lock-and-findings.md."""
+    findings = (run.security or {}).get("findings", [])
+    order = {lvl: i for i, lvl in enumerate(_SEVERITY_ORDER)}
+    findings = sorted(findings, key=lambda f: order.get(f.get("severity"), 99))
+    critical_high = [f for f in findings if f.get("severity") in _PROMINENT_SEVERITIES]
+    rest = [f for f in findings if f.get("severity") not in _PROMINENT_SEVERITIES]
+    return critical_high, rest
+
+
 @router.get("/runs/{run_id}", response_class=HTMLResponse)
 def run_page(request: Request, run_id: str, db: Session = Depends(get_db)):
     r = db.get(Run, run_id)
     if not r:
         return HTMLResponse("Run not found", status_code=404)
     project = db.get(Project, r.project_id)
+    critical_high, rest = _split_by_severity(r)
     return templates.TemplateResponse(
         request, "run.html",
         {"run": r, "project": project, "project_name": project.name if project else "?",
-         "nodes": NODES, "fixable_files": _fixable_files(r)})
+         "nodes": NODES, "fixable_files": _fixable_files(r),
+         "critical_high_findings": critical_high, "rest_findings": rest})
 
 
 @router.get("/costs", response_class=HTMLResponse)

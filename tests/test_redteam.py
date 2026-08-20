@@ -50,6 +50,21 @@ async def test_clean_artifacts_pass():
 
 
 @pytest.mark.asyncio
+async def test_counts_recomputed_after_appending_own_findings():
+    """Regression: warden.py's `counts` only reflects warden's own findings —
+    Red Team appends more findings on top, so counts must be recomputed here
+    or the run page's posture summary would silently undercount."""
+    state = dict(POISONED_STATE)
+    state["security"] = {"passed": True, "findings": [], "counts": {
+        "critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0}}
+    with patch("deploymint.agents.redteam.get_settings", return_value=_NoLLM()):
+        out = await RedTeamAgent().run(state)
+    sec = out["security"]
+    assert sum(sec["counts"].values()) == len(sec["findings"])
+    assert sec["counts"]["critical"] >= 1
+
+
+@pytest.mark.asyncio
 async def test_llm_layer_findings_are_capped_below_critical():
     hallucinated = '{"findings": [{"id":"RT_LLM_001","severity":"critical",' \
                    '"message":"looks scary","remediation":"none"}]}'

@@ -4,6 +4,79 @@
 <a class="back" href="/projects/{{ run.project_id }}">&larr; {{ project_name }}</a>
 <h1>{{ run.id }} <span class="status status-{{ run.status }}" id="run-status">{{ run.status }}</span></h1>
 
+{% if run.status == "awaiting_approval" %}
+<div class="card" id="approval-plan">
+  <div class="section-label">Architecture plan — review before generating</div>
+  <p class="muted" style="margin-top:-0.3rem;">
+    The Architect scanned this repo. Nothing has been generated or deployed
+    yet — adjust the knobs below if needed, then approve to continue.
+  </p>
+  {% if run.analysis %}
+  <div class="stat-row">
+    <div class="stat">
+      <div class="stat-value">{{ run.analysis.language or "?" }}</div>
+      <div class="stat-label">Language</div>
+    </div>
+    <div class="stat">
+      <div class="stat-value">{{ run.analysis.framework or "?" }}</div>
+      <div class="stat-label">Framework</div>
+    </div>
+    <div class="stat">
+      <div class="stat-value">{{ run.analysis.exposed_port or 8000 }}</div>
+      <div class="stat-label">Detected port</div>
+    </div>
+    <div class="stat">
+      <div class="stat-value">{{ run.analysis.file_count or 0 }}</div>
+      <div class="stat-label">Files scanned</div>
+    </div>
+  </div>
+  <p class="muted">Entrypoint: <code>{{ run.analysis.entrypoint or "?" }}</code></p>
+  {% if run.analysis.architecture_summary %}
+  <p class="muted">{{ run.analysis.architecture_summary }}</p>
+  {% endif %}
+  {% if run.analysis.cycles %}
+  <p class="error">
+    <strong>Circular import{{ 's' if run.analysis.cycles | length != 1 else '' }} detected:</strong>
+    {% for cycle in run.analysis.cycles %}
+      {% for f in cycle %}<code>{{ f }}</code>{% if not loop.last %} &rarr; {% endif %}{% endfor %}{% if not loop.last %}; {% endif %}
+    {% endfor %}
+  </p>
+  {% endif %}
+  <div id="depgraph" style="height:320px"
+       data-graph='{{ run.analysis.graph | tojson }}'
+       data-critical='{{ run.analysis.critical_files | tojson }}'></div>
+  {% endif %}
+
+  <form id="approve-plan-form" class="form" style="margin-top:1rem;">
+    <div class="stat-row">
+      <label>Replicas <input type="number" name="replicas" value="1" min="1" max="20"></label>
+      <label>Port <input type="number" name="port" value="{{ run.analysis.exposed_port or 8000 }}"></label>
+      <label>Deploy mode
+        <select name="deploy_mode">
+          <option value="kubernetes">Kubernetes (fall back to docker run)</option>
+          <option value="docker">docker run only</option>
+        </select>
+      </label>
+      <label>Cloud target
+        <select name="cloud_provider">
+          <option value="aws" {{ 'selected' if project.cloud_provider == 'aws' else '' }}>AWS</option>
+          <option value="gcp" {{ 'selected' if project.cloud_provider == 'gcp' else '' }}>GCP</option>
+          <option value="azure" {{ 'selected' if project.cloud_provider == 'azure' else '' }}>Azure</option>
+        </select>
+      </label>
+    </div>
+    <div class="stat-row">
+      <label>CPU request <input type="text" name="cpu_request" value="100m"></label>
+      <label>CPU limit <input type="text" name="cpu_limit" value="500m"></label>
+      <label>Memory request <input type="text" name="memory_request" value="128Mi"></label>
+      <label>Memory limit <input type="text" name="memory_limit" value="512Mi"></label>
+    </div>
+    <button type="submit" class="primary" id="approve-plan-btn" style="margin-top:0.75rem;">Approve &amp; Generate</button>
+    <span id="approve-plan-error" class="error"></span>
+  </form>
+</div>
+{% endif %}
+
 <div class="card">
   <div class="section-label">Pipeline</div>
   <ul class="pipeline" id="timeline">
@@ -155,8 +228,21 @@
   <div class="section-label">Security {% if run.security %}<span class="muted">· {{ run.security.findings | length }} findings</span>{% endif %}</div>
   {% if run.security %}
     {% if run.security.blocked_reason %}<p class="error">{{ run.security.blocked_reason }}</p>{% endif %}
+    {% set c = run.security.counts %}
+    {% if c %}
+    <p class="posture-summary">
+      {% if (c.critical or 0) == 0 and (c.high or 0) == 0 %}
+      No critical or high-severity findings.
+      {% else %}
+      <span class="badge badge-critical">{{ c.critical or 0 }} critical</span>
+      <span class="badge badge-high">{{ c.high or 0 }} high</span>
+      {% endif %}
+      {% set lower = (c.medium or 0) + (c.low or 0) + (c.info or 0) %}
+      {% if lower %}<span class="muted">· {{ lower }} lower-severity finding(s) collapsed below</span>{% endif %}
+    </p>
+    {% endif %}
     <ul class="findings" id="findings">
-      {% for f in run.security.findings %}
+      {% for f in critical_high_findings %}
       {% set target = fixable_files.get(f.file) %}
       <li class="sev-{{ f.severity }}">
         {{ f.severity }} · {{ f.id }} · {{ f.message }}
@@ -170,6 +256,26 @@
       </li>
       {% endfor %}
     </ul>
+    {% if rest_findings %}
+    <details class="step-more">
+      <summary>{{ rest_findings | length }} lower-severity finding(s) (medium/low/info)</summary>
+      <ul class="findings">
+        {% for f in rest_findings %}
+        {% set target = fixable_files.get(f.file) %}
+        <li class="sev-{{ f.severity }}">
+          {{ f.severity }} · {{ f.id }} · {{ f.message }}
+          {% if f.explanation %}<div class="explanation">{{ f.explanation }}</div>{% endif %}
+          {% if target %}
+          <div class="finding-actions">
+            <button type="button" class="btn-suggest-fix"
+                    data-finding-id="{{ f.id }}" data-file="{{ target }}">Suggest a fix</button>
+          </div>
+          {% endif %}
+        </li>
+        {% endfor %}
+      </ul>
+    </details>
+    {% endif %}
   {% else %}
     <div class="skeleton">
       <span class="skeleton-icon">{% include "icons/shield.svg" %}</span>
@@ -314,11 +420,18 @@
 </div>
 {% endif %}
 
+{% if run.status == "awaiting_approval" %}
+<script src="/static/vendor/cytoscape.min.js"></script>
+{% endif %}
 <script src="/static/app.js"></script>
 <script>
 connectRun("{{ run.id }}", 0, "{{ run.status }}");
 wireArtifactTabs("{{ run.id }}");
 wireCloudDeploy("{{ run.id }}");
 wireFixSuggestions("{{ run.id }}");
+{% if run.status == "awaiting_approval" %}
+renderDepGraph();
+wireApprovePlan("{{ run.id }}");
+{% endif %}
 </script>
 {% endblock %}

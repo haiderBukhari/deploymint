@@ -55,12 +55,16 @@ class ArtifactSmithAgent(BaseAgent):
         analysis = state.get("analysis") or {}
         project_name = state["project_name"]
         image = f"deploymint/{project_name}:{state['run_id']}"
+        # Knobs from the architecture approval gate (docs/33), if this run
+        # went through it — None on the ungated path, leaving every existing
+        # behavior untouched.
+        approved_plan = state.get("approved_plan")
 
         await self.emit("smith.thinking", model=s.model)
 
         artifacts, how, err = None, "template", None
         try:
-            artifacts = await self._generate_llm(analysis, project_name, image)
+            artifacts = await self._generate_llm(analysis, project_name, image, approved_plan)
             how = "llm"
         except llm.LLMError as e:
             # The API call itself failed (network, auth, rate limit, timeout —
@@ -81,10 +85,16 @@ class ArtifactSmithAgent(BaseAgent):
                 err = f"{err} | repair failed: {str(e2)[:200]}"
 
         if artifacts is None:
-            artifacts = templates.render(analysis, project_name, image)
+            artifacts = templates.render(analysis, project_name, image, approved_plan)
             how = "template"
         else:
             artifacts = _inject_image(artifacts, image, project_name)
+            if approved_plan:
+                # The LLM path doesn't go through templates.render(), so it
+                # needs its own binding step — same knobs, applied by
+                # rewriting the model's YAML directly rather than
+                # regenerating it. See docs/33-deploy-lock-and-findings.md.
+                artifacts = _apply_approved_plan(artifacts, approved_plan)
 
         result: dict = {
             "artifacts": {
@@ -98,7 +108,7 @@ class ArtifactSmithAgent(BaseAgent):
                 "reasoning_detail": artifacts.reasoning_detail,
                 **templates.render_extra_artifacts(
                     analysis, project_name, image, state["run_id"],
-                    state.get("cloud_provider", "aws")),
+                    state.get("cloud_provider", "aws"), approved_plan),
             }
         }
         if err and how == "template":
@@ -111,7 +121,7 @@ class ArtifactSmithAgent(BaseAgent):
         return result
 
     async def _generate_llm(
-        self, analysis: dict, project_name: str, image: str
+        self, analysis: dict, project_name: str, image: str, approved_plan: dict | None = None,
     ) -> GeneratedArtifacts:
         # More critical files, and a compact summary of the import graph
         # around them — previously Smith never saw the graph/services at
@@ -125,13 +135,29 @@ class ArtifactSmithAgent(BaseAgent):
         trimmed["import_graph_summary"] = _graph_summary(analysis, critical_files)
 
         fewshot = format_fewshot(analysis.get("language", ""), analysis.get("framework", ""))
+        # The approved knobs override analysis's raw port — and get their own
+        # paragraph in the prompt below so the LLM path honors replicas/
+        # resources too, not just the deterministic template path (which
+        # applies them post-hoc in templates.render()). See docs/33.
+        exposed_port = (approved_plan or {}).get("port") or analysis.get("exposed_port", 8000)
         user = prompts.SMITH_USER.format(
             analysis_json=json.dumps(trimmed, indent=2),
             fewshot=fewshot,
             project_name=project_name,
-            exposed_port=analysis.get("exposed_port", 8000),
+            exposed_port=exposed_port,
             entrypoint=analysis.get("entrypoint", ""),
         )
+        if approved_plan:
+            user += (
+                "\n\nThe user has approved this deployment plan — the Kubernetes "
+                "Deployment you generate MUST use these exact values, not your own "
+                f"defaults: replicas={approved_plan.get('replicas', 1)}, "
+                f"cpu request={approved_plan.get('cpu_request', '100m')}, "
+                f"cpu limit={approved_plan.get('cpu_limit', '500m')}, "
+                f"memory request={approved_plan.get('memory_request', '128Mi')}, "
+                f"memory limit={approved_plan.get('memory_limit', '512Mi')}, "
+                f"container port={exposed_port}."
+            )
         system = prompts.SMITH_SYSTEM.format(requirements=prompts.HARD_REQUIREMENTS)
 
         self._last_raw = await llm.complete(
@@ -174,6 +200,46 @@ def _inject_image(art: GeneratedArtifacts, image: str, name: str) -> GeneratedAr
     except Exception:
         # If the model's YAML is too malformed to safely rewrite, let the
         # caller's outer validation/fallback handle it rather than crashing here.
+        pass
+    return art
+
+
+def _apply_approved_plan(art: GeneratedArtifacts, approved_plan: dict) -> GeneratedArtifacts:
+    """Rewrites the LLM-generated k8s_deployment/k8s_service YAML in place
+    with the approved knobs — same binding requirement templates.render()
+    satisfies for the deterministic path, applied here by patching the
+    model's own YAML (same style as _inject_image above) rather than
+    regenerating it from scratch. Never raises: malformed YAML from the
+    model is the outer caller's problem (validation/fallback), not this
+    best-effort patch's. See docs/33-deploy-lock-and-findings.md."""
+    try:
+        port = approved_plan.get("port")
+        doc = yaml.safe_load(art.k8s_deployment)
+        doc["spec"]["replicas"] = approved_plan.get("replicas", 1)
+        containers = doc["spec"]["template"]["spec"]["containers"]
+        for c in containers:
+            c["resources"] = {
+                "requests": {
+                    "cpu": approved_plan.get("cpu_request", "100m"),
+                    "memory": approved_plan.get("memory_request", "128Mi"),
+                },
+                "limits": {
+                    "cpu": approved_plan.get("cpu_limit", "500m"),
+                    "memory": approved_plan.get("memory_limit", "512Mi"),
+                },
+            }
+            if port:
+                for p in c.get("ports", []):
+                    p["containerPort"] = port
+        art.k8s_deployment = yaml.safe_dump(doc, sort_keys=False)
+
+        if port:
+            svc = yaml.safe_load(art.k8s_service)
+            for p in svc.get("spec", {}).get("ports", []):
+                p["port"] = port
+                p["targetPort"] = port
+            art.k8s_service = yaml.safe_dump(svc, sort_keys=False)
+    except Exception:
         pass
     return art
 

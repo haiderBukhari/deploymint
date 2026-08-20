@@ -71,6 +71,11 @@ class SecurityReport(TypedDict):
     # different scan (the built image, not the generated files) that runs
     # from a different graph position and can fail independently.
     trivy_image_ran: NotRequired[bool]
+    # Per-severity totals across all findings, e.g. {"critical": 1, "high": 3,
+    # "medium": 5, "low": 190, "info": 6} — already computed in warden.py for
+    # the warden.done event; persisted here too so the run page can render a
+    # one-line posture summary without recomputing it. See docs/33-deploy-lock-and-findings.md.
+    counts: NotRequired[dict[str, int]]
     blocked_reason: NotRequired[str]
 
 

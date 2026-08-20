@@ -141,6 +141,47 @@ async def test_prompt_includes_the_import_graph_and_services_now():
 
 
 @pytest.mark.asyncio
+async def test_approved_plan_binds_replicas_and_port_on_template_path():
+    """The 'must bind, not just display' requirement for the architecture
+    approval gate — a non-default replicas/port must actually appear in the
+    rendered k8s_deployment YAML, not just in the stored approved_plan JSONB
+    column. See docs/33-deploy-lock-and-findings.md."""
+    state = {**BASE, "approved_plan": {"replicas": 3, "port": 9090}}
+    with patch("deploymint.core.llm.complete", return_value="I'm sorry, I can't help."):
+        out = await ArtifactSmithAgent().run(state)
+    assert out["artifacts"]["generated_by"] == "template"
+    assert "replicas: 3" in out["artifacts"]["k8s_deployment"]
+    assert "containerPort: 9090" in out["artifacts"]["k8s_deployment"]
+
+
+@pytest.mark.asyncio
+async def test_approved_plan_binds_replicas_on_llm_path():
+    good = (
+        '{"dockerfile":"FROM python:3.11-slim\\nUSER 10001\\nCMD [\\"python\\"]",'
+        '"dockerignore":"","k8s_deployment":"kind: Deployment\\nmetadata:\\n  name: t\\n'
+        "spec:\\n  replicas: 1\\n  selector:\\n    matchLabels: {}\\n"
+        "  template:\\n    metadata: {}\\n"
+        "    spec:\\n      containers:\\n      - name: t\\n"
+        '        image: x\\n        ports:\\n        - containerPort: 8000\\n'
+        '","k8s_service":"kind: Service\\nmetadata:\\n  name: t\\n'
+        'spec:\\n  ports:\\n  - port: 8000\\n    targetPort: 8000","reasoning":"ok"}'
+    )
+    state = {**BASE, "approved_plan": {"replicas": 5, "port": 9090}}
+    with patch("deploymint.core.llm.complete", return_value=good):
+        out = await ArtifactSmithAgent().run(state)
+    assert out["artifacts"]["generated_by"] == "llm"
+    assert "replicas: 5" in out["artifacts"]["k8s_deployment"]
+    assert "containerPort: 9090" in out["artifacts"]["k8s_deployment"]
+
+
+@pytest.mark.asyncio
+async def test_no_approved_plan_leaves_defaults_unchanged():
+    with patch("deploymint.core.llm.complete", return_value="nope"):
+        out = await ArtifactSmithAgent().run(dict(BASE))
+    assert "replicas: 1" in out["artifacts"]["k8s_deployment"]
+
+
+@pytest.mark.asyncio
 async def test_repair_recovers_from_one_bad_attempt():
     bad = '{"dockerfile": "no from instruction here"}'
     good = (

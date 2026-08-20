@@ -1,6 +1,8 @@
 """Deterministic Dockerfile/K8s templates — the fallback that guarantees a run
 always produces artifacts. See docs/06-phase-2-generation.md §2.5."""
 
+import re
+
 from deploymint.schemas.artifacts import GeneratedArtifacts
 
 PY_VERSION = "3.11"  # a safe, modern default — see the note in _python_fastapi()
@@ -17,7 +19,11 @@ def _labels(name: str) -> str:
     return f"app: {name}, managed-by: deploymint"
 
 
-def _k8s_deployment(name: str, image: str, port: int) -> str:
+def _k8s_deployment(
+    name: str, image: str, port: int, *, replicas: int = 1,
+    cpu_request: str = "100m", cpu_limit: str = "500m",
+    mem_request: str = "128Mi", mem_limit: str = "512Mi",
+) -> str:
     return f"""\
 apiVersion: apps/v1
 kind: Deployment
@@ -25,7 +31,7 @@ metadata:
   name: {name}
   labels: {{ {_labels(name)} }}
 spec:
-  replicas: 1
+  replicas: {replicas}
   selector:
     matchLabels: {{ app: {name} }}
   template:
@@ -43,8 +49,8 @@ spec:
           ports:
             - containerPort: {port}
           resources:
-            requests: {{ cpu: "100m", memory: "128Mi" }}
-            limits:   {{ cpu: "500m", memory: "512Mi" }}
+            requests: {{ cpu: "{cpu_request}", memory: "{mem_request}" }}
+            limits:   {{ cpu: "{cpu_limit}", memory: "{mem_limit}" }}
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
@@ -265,10 +271,34 @@ REGISTRY = {
 }
 
 
-def render(analysis: dict, project_name: str, image: str) -> GeneratedArtifacts:
+def render(
+    analysis: dict, project_name: str, image: str, approved_plan: dict | None = None,
+) -> GeneratedArtifacts:
+    """approved_plan is the knob set from the architecture approval gate
+    (docs/33-deploy-lock-and-findings.md) — replicas/CPU/memory/port. Rather
+    than threading it through every per-language generator above (they all
+    share the same (analysis, name, image) signature), the base artifacts are
+    generated exactly as before and then k8s_deployment/k8s_service are
+    regenerated with the approved values applied on top — this is the "must
+    actually bind the output, not just display it" requirement. None (the
+    default, and every existing call site) leaves today's behavior untouched."""
     key = (analysis.get("language"), analysis.get("framework"))
     fn = REGISTRY.get(key) or REGISTRY.get((analysis.get("language"), "*")) or _generic
-    return fn(analysis, project_name, image)
+    art = fn(analysis, project_name, image)
+    if approved_plan:
+        port_match = re.search(r"targetPort:\s*(\d+)", art.k8s_service)
+        default_port = int(port_match.group(1)) if port_match else analysis.get("exposed_port", 8000)
+        port = approved_plan.get("port") or default_port
+        art.k8s_deployment = _k8s_deployment(
+            project_name, image, port,
+            replicas=approved_plan.get("replicas", 1),
+            cpu_request=approved_plan.get("cpu_request", "100m"),
+            cpu_limit=approved_plan.get("cpu_limit", "500m"),
+            mem_request=approved_plan.get("memory_request", "128Mi"),
+            mem_limit=approved_plan.get("memory_limit", "512Mi"),
+        )
+        art.k8s_service = _k8s_service(project_name, port)
+    return art
 
 
 # ---------------------------------------------------------------------------
@@ -720,13 +750,16 @@ def render_grafana_dashboard(name: str) -> str:
 
 
 def render_extra_artifacts(
-    analysis: dict, name: str, image: str, run_id: str, cloud: str = "aws"
+    analysis: dict, name: str, image: str, run_id: str, cloud: str = "aws",
+    approved_plan: dict | None = None,
 ) -> dict:
     """Always generated, regardless of whether the Dockerfile/K8s path used
     the LLM or the template fallback — see the module docstring above for why
     these stay deterministic. `cloud` picks the Terraform target
-    (docs/19-managed-clusters.md); everything else is cloud-agnostic."""
-    port = analysis.get("exposed_port", 8000)
+    (docs/19-managed-clusters.md); everything else is cloud-agnostic.
+    approved_plan's port, if set, overrides analysis's — same binding
+    requirement as render()'s k8s_deployment/k8s_service above."""
+    port = (approved_plan or {}).get("port") or analysis.get("exposed_port", 8000)
     return {
         "terraform": render_terraform(name, image, port, cloud),
         "ansible_playbook": render_ansible(name, image, port),
