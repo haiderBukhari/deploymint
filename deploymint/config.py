@@ -43,6 +43,15 @@ class Settings(BaseSettings):
     # kubernetes — optional; falls back to `docker run` if unreachable
     kube_context: str = ""
     rollout_timeout: int = 120
+    # Auto-provision a real local `kind` cluster (via kube_engine.ensure_kind_cluster)
+    # when deploy_mode="kubernetes" and no cluster is reachable, instead of
+    # silently falling back to `docker run`. Default OFF: today's near-instant
+    # docker-run fallback must not silently become a 30-90s+ cluster-creation
+    # step for everyone who never asked for it — and it's effectively
+    # Linux-only today (Docker Desktop on macOS/Windows runs the daemon in a
+    # VM, so the created cluster's kubeconfig server address isn't guaranteed
+    # reachable from inside this container). See docs/35-kind-cluster.md.
+    enable_auto_kind_cluster: bool = False
 
     # security
     block_severity: str = "critical"  # critical | high | medium
@@ -79,6 +88,13 @@ class Settings(BaseSettings):
     @property
     def openai_api_key(self) -> str:
         return os.environ.get("OPENAI_API_KEY", "")
+
+    @property
+    def secret_key(self) -> str:
+        """Fernet key encrypting stored cloud credentials (docs/36-monitoring.md)
+        — deliberately env-var-only, matching anthropic_api_key/openai_api_key
+        above, so the key never lives next to the ciphertext it protects."""
+        return os.environ.get("DEPLOYMINT_SECRET_KEY", "")
 
 
 @lru_cache

@@ -1,6 +1,7 @@
 """Deterministic repo scanning: file walk, language/framework/entrypoint/port
 detection, and tree-sitter import extraction. See docs/04-agents-spec.md §4.1."""
 
+import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -73,28 +74,34 @@ class ScanResult:
 
 
 def walk_repo(root: Path) -> ScanResult:
-    """Recursive walk, skipping vendor/build dirs and enforcing size caps."""
+    """Recursive walk, skipping vendor/build dirs and enforcing size caps.
+
+    Uses os.walk with in-place dirnames pruning rather than
+    `sorted(root.rglob("*"))` — rglob has no directory-pruning hook, so it
+    fully traverses into .git/node_modules/venv/etc. before SKIP_DIRS is
+    ever checked on the yielded path. Pruning before descending avoids that
+    wasted traversal on dependency-heavy repos. See
+    docs/32-architect-thread-offload.md."""
     result = ScanResult()
     gitignore_patterns = _load_gitignore(root)
 
-    for path in sorted(root.rglob("*")):
-        if not path.is_file():
-            continue
-        rel = path.relative_to(root)
-        if any(part in SKIP_DIRS for part in rel.parts):
-            continue
-        if _gitignore_matches(rel, gitignore_patterns):
-            continue
-        try:
-            if path.stat().st_size > MAX_FILE_BYTES:
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = sorted(d for d in dirnames if d not in SKIP_DIRS)
+        for fname in sorted(filenames):
+            path = Path(dirpath) / fname
+            rel = path.relative_to(root)
+            if _gitignore_matches(rel, gitignore_patterns):
                 continue
-        except OSError:
-            continue
+            try:
+                if path.stat().st_size > MAX_FILE_BYTES:
+                    continue
+            except OSError:
+                continue
 
-        result.files.append(path)
-        if len(result.files) >= MAX_FILES:
-            result.truncated = True
-            break
+            result.files.append(path)
+            if len(result.files) >= MAX_FILES:
+                result.truncated = True
+                return result
 
     return result
 

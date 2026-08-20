@@ -2,7 +2,7 @@
 
 from datetime import UTC, datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, String, Text
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, LargeBinary, String, Text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -111,3 +111,20 @@ class AuditLog(Base):
     ts: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     __table_args__ = (Index("ix_audit_run_seq", "run_id", "seq", unique=True),)
+
+
+class CloudCredential(Base):
+    """One row per cloud provider — encrypted-at-rest so the Monitoring page
+    can hold AWS/Azure/GCP credentials without re-entering them per deploy.
+    Only `encrypted_blob` (Fernet ciphertext of the JSON-serialized
+    credential fields) ever touches the database — the key itself lives in
+    DEPLOYMINT_SECRET_KEY, an env var, never in this table. See
+    docs/36-monitoring.md."""
+
+    __tablename__ = "cloud_credentials"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    cloud: Mapped[str] = mapped_column(String(20), unique=True, index=True)  # aws|azure|gcp
+    encrypted_blob: Mapped[bytes] = mapped_column(LargeBinary)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow,
+                                                 onupdate=utcnow)

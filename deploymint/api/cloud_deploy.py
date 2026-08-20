@@ -21,6 +21,7 @@ from sqlalchemy.orm import Session
 from deploymint.core.artifact_store import FILENAMES
 from deploymint.core.cloud_creds import CloudCredentials, MissingCredentials, build_env
 from deploymint.core.cloud_jobs import registry
+from deploymint.core.credential_store import load_credentials
 from deploymint.core.terraform_exec import run_terraform
 from deploymint.db.database import get_db, get_session_factory
 from deploymint.db.models import Project, Run
@@ -88,7 +89,17 @@ async def start_cloud_deploy(run_id: str, action: str, body: CloudDeployRequest,
     if not project:
         raise HTTPException(404, "project not found")
 
-    creds = CloudCredentials(**body.model_dump())
+    # A form field left blank falls back to the globally-saved credential for
+    # this cloud (docs/36-monitoring.md) — a per-request value always wins
+    # when provided, so a one-off override never touches the stored default.
+    fields = body.model_dump()
+    try:
+        stored = load_credentials(project.cloud_provider) or {}
+    except Exception:
+        # a broken/rotated secret key must not break a request that supplies its own creds
+        stored = {}
+    merged = {k: (v or stored.get(k, "")) for k, v in fields.items()}
+    creds = CloudCredentials(**merged)
     try:
         build_env(project.cloud_provider, creds)  # validate only; env applied inside terraform_exec
     except MissingCredentials as e:

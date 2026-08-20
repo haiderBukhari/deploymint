@@ -106,6 +106,45 @@ async def test_concurrent_deploy_is_rejected(client, successful_run):
 
 
 @pytest.mark.asyncio
+async def test_blank_form_falls_back_to_stored_credential(client, successful_run):
+    """The whole point of the Monitoring page's global credentials — a
+    blank Cloud Deploy form must still work if a credential is saved.
+    See docs/36-monitoring.md."""
+    from cryptography.fernet import Fernet
+
+    key = Fernet.generate_key().decode()
+    with patch.dict("os.environ", {"DEPLOYMINT_SECRET_KEY": key}):
+        r = client.post("/api/settings/credentials/aws", json=AWS_CREDS)
+        assert r.status_code == 201
+
+        with patch("deploymint.api.cloud_deploy.run_terraform", _fake_ok):
+            r = client.post(f"/api/runs/{successful_run}/cloud/plan", json={})
+            assert r.status_code == 202, r.json()
+            _wait_for_job(client, successful_run)
+
+
+@pytest.mark.asyncio
+async def test_per_request_credentials_override_the_stored_one(client, successful_run):
+    from cryptography.fernet import Fernet
+
+    key = Fernet.generate_key().decode()
+    with patch.dict("os.environ", {"DEPLOYMINT_SECRET_KEY": key}):
+        client.post("/api/settings/credentials/aws", json=AWS_CREDS)
+
+        captured = {}
+
+        async def _capture(action, directory, cloud, creds, on_line):
+            captured["access_key"] = creds.aws_access_key_id
+            return True
+
+        with patch("deploymint.api.cloud_deploy.run_terraform", _capture):
+            override = {**AWS_CREDS, "aws_access_key_id": "AKIA_OVERRIDE"}
+            client.post(f"/api/runs/{successful_run}/cloud/plan", json=override)
+            _wait_for_job(client, successful_run)
+    assert captured["access_key"] == "AKIA_OVERRIDE"
+
+
+@pytest.mark.asyncio
 async def test_apply_persists_status_onto_the_run_row(client, successful_run):
     with patch("deploymint.api.cloud_deploy.run_terraform", _fake_ok):
         client.post(f"/api/runs/{successful_run}/cloud/apply", json=AWS_CREDS)

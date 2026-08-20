@@ -1,0 +1,143 @@
+{% extends "base.html" %}
+{% block title %}Monitoring · DeployMint{% endblock %}
+{% block content %}
+<h1>Monitoring</h1>
+<p class="muted">Cloud credentials, fleet status, and how hard each agent is
+  working — all in one place.</p>
+
+<div class="card">
+  <div class="section-label">Cloud credentials</div>
+  <p class="muted" style="margin-top:-0.3rem;">
+    Set once here instead of re-entering on every Cloud Deploy action.
+    Encrypted at rest — the raw values are never shown again after saving.
+  </p>
+  <div id="credential-error" class="error" style="display:none;"></div>
+  <div class="stat-row">
+    {% for cloud in ("aws", "azure", "gcp") %}
+    <div class="stat">
+      <div class="stat-value" style="font-size:1rem;">
+        {% if credentials[cloud] %}
+        <span class="badge badge-ok">configured</span>
+        {% else %}
+        <span class="badge badge-fail">not configured</span>
+        {% endif %}
+      </div>
+      <div class="stat-label">{{ cloud|upper }}</div>
+    </div>
+    {% endfor %}
+  </div>
+
+  <div class="form" style="margin-top:1rem;">
+    <label>Cloud
+      <select id="cred-cloud">
+        <option value="aws">AWS</option>
+        <option value="azure">Azure</option>
+        <option value="gcp">GCP</option>
+      </select>
+    </label>
+
+    <div id="cred-fields-aws" class="cred-fields">
+      <div class="form-row"><label>Access Key ID<input type="password" id="cred-aws-key" autocomplete="off"></label></div>
+      <div class="form-row"><label>Secret Access Key<input type="password" id="cred-aws-secret" autocomplete="off"></label></div>
+      <div class="form-row"><label>Session Token (optional)<input type="password" id="cred-aws-token" autocomplete="off"></label></div>
+      <div class="form-row"><label>Region<input type="text" id="cred-aws-region" placeholder="us-east-1"></label></div>
+    </div>
+    <div id="cred-fields-azure" class="cred-fields" style="display:none;">
+      <div class="form-row"><label>Subscription ID<input type="password" id="cred-azure-sub" autocomplete="off"></label></div>
+      <div class="form-row"><label>Tenant ID<input type="password" id="cred-azure-tenant" autocomplete="off"></label></div>
+      <div class="form-row"><label>Client ID<input type="password" id="cred-azure-client" autocomplete="off"></label></div>
+      <div class="form-row"><label>Client Secret<input type="password" id="cred-azure-secret" autocomplete="off"></label></div>
+    </div>
+    <div id="cred-fields-gcp" class="cred-fields" style="display:none;">
+      <div class="form-row"><label>Project ID<input type="text" id="cred-gcp-project"></label></div>
+      <div class="form-row"><label>Service Account JSON<textarea id="cred-gcp-json" rows="4" autocomplete="off"></textarea></label></div>
+    </div>
+
+    <div class="form-row">
+      <button type="button" id="cred-save-btn">Save</button>
+      <button type="button" id="cred-forget-btn" class="btn-cta-secondary">Forget</button>
+    </div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="section-label">Fleet status <span class="muted">· {{ fleet | length }} project(s)</span></div>
+  <button type="button" id="recheck-btn" style="margin-bottom:0.6rem;">Recheck now</button>
+  <table>
+    <thead><tr><th>Project</th><th>Latest run</th><th>Deployment</th><th>Mode</th><th>URL</th></tr></thead>
+    <tbody>
+      {% for f in fleet %}
+      <tr data-run-id="{{ f.run_id or '' }}">
+        <td><a href="/projects/{{ f.project.id }}">{{ f.project.name }}</a></td>
+        <td>{% if f.run_id %}<a href="/runs/{{ f.run_id }}">{{ f.run_status }}</a>{% else %}—{% endif %}</td>
+        <td class="recheck-status">
+          {% if f.deploy_status %}
+          <span class="badge {{ 'badge-ok' if f.deploy_status == 'running' else 'badge-fail' }}">{{ f.deploy_status }}</span>
+          {% else %}—{% endif %}
+        </td>
+        <td>{{ f.mode or "—" }}</td>
+        <td>{% if f.local_url %}<a href="{{ f.local_url }}" target="_blank" rel="noopener">{{ f.local_url }}</a>{% else %}—{% endif %}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="5" class="muted">No projects yet.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<div class="card">
+  <div class="section-label">Agent performance <span class="muted">· last {{ cost_summary.run_count }} run(s) with token usage, up to 50 runs sampled overall</span></div>
+  {% set max_ms = (agent_stats | map(attribute='avg_ms') | max) or 1 %}
+  <div class="agent-perf-chart">
+    {% for a in agent_stats %}
+    <div class="agent-perf-row">
+      <div class="agent-perf-label">{{ a.agent }}</div>
+      <svg viewBox="0 0 300 22" class="agent-perf-bar" preserveAspectRatio="none">
+        <rect x="0" y="0" width="300" height="22" fill="var(--bg-subtle)"></rect>
+        <rect x="0" y="0" width="{{ (a.avg_ms / max_ms * 300) | round(1) }}" height="22"
+              fill="{{ 'var(--red)' if a.error_rate > 10 else 'var(--mint)' }}"></rect>
+      </svg>
+      <div class="agent-perf-value">{{ a.avg_ms }}ms avg
+        {% if a.errors %}<span class="muted">· {{ a.error_rate }}% error</span>{% endif %}
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+  <table style="margin-top:1rem;">
+    <thead><tr><th>Agent</th><th>Runs</th><th>Avg</th><th>Median</th><th>Max</th><th>Errors</th></tr></thead>
+    <tbody>
+      {% for a in agent_stats %}
+      <tr>
+        <td>{{ a.agent }}</td><td>{{ a.runs }}</td><td>{{ a.avg_ms }}ms</td>
+        <td>{{ a.median_ms }}ms</td><td>{{ a.max_ms }}ms</td>
+        <td>{{ a.errors }}{% if a.errors %} ({{ a.error_rate }}%){% endif %}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<div class="card">
+  <div class="section-label">LLM cost by model <span class="muted">· ${{ "%.4f"|format(cost_summary.total) }} total</span></div>
+  {% if cost_summary.by_model %}
+  {% set max_cost = (cost_summary.by_model.values() | max) or 1 %}
+  <div class="agent-perf-chart">
+    {% for model, cost in cost_summary.by_model.items() %}
+    <div class="agent-perf-row">
+      <div class="agent-perf-label">{{ model }}</div>
+      <svg viewBox="0 0 300 22" class="agent-perf-bar" preserveAspectRatio="none">
+        <rect x="0" y="0" width="300" height="22" fill="var(--bg-subtle)"></rect>
+        <rect x="0" y="0" width="{{ (cost / max_cost * 300) | round(1) }}" height="22" fill="var(--mint)"></rect>
+      </svg>
+      <div class="agent-perf-value">${{ "%.4f"|format(cost) }}</div>
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <p class="muted">No LLM-generated runs yet.</p>
+  {% endif %}
+</div>
+
+<script src="/static/app.js"></script>
+<script>wireMonitoring();</script>
+{% endblock %}

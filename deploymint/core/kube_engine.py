@@ -38,6 +38,34 @@ async def kind_load(image: str, cluster_name: str, **kw):
         timeout=180, **kw)
 
 
+async def kind_cluster_exists(name: str, **kw) -> bool:
+    r = await run_command(["kind", "get", "clusters"], timeout=15, **kw)
+    return r.ok and name in r.stdout.split()
+
+
+async def ensure_kind_cluster(name: str = "deploymint", **kw) -> bool:
+    """Auto-provisions a real local Kubernetes cluster instead of the plain
+    `docker run` fallback — opt-in via `enable_auto_kind_cluster` (see
+    execution.py). Never raises, same never-block-the-pipeline principle
+    every other function in this file follows: returns True iff a cluster
+    named `name` is confirmed to exist afterward (pre-existing or freshly
+    created), False on any failure. `kind create cluster` sets the
+    kubeconfig's current-context to `kind-{name}` automatically — no extra
+    step needed for cluster_reachable()/kind_cluster_name() to immediately
+    see it. See docs/32-architect-thread-offload.md's sibling doc for the
+    Docker-networking caveat this depends on (macOS/Windows Docker Desktop
+    may not make the created cluster reachable from inside this container —
+    this degrades to a no-op False in that case, never a hang or a raise)."""
+    try:
+        if await kind_cluster_exists(name, **kw):
+            return True
+        r = await run_command(["kind", "create", "cluster", "--name", name],
+                              timeout=180, **kw)
+        return r.ok
+    except Exception:
+        return False
+
+
 async def apply(paths: list[str], **kw):
     argv = ["kubectl", *_ctx(), "apply"]
     for p in paths:

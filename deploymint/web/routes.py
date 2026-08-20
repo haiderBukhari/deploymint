@@ -10,7 +10,9 @@ from sqlalchemy.orm import Session
 
 from deploymint.api.costs import _sample_export_by_service
 from deploymint.config import get_settings
+from deploymint.core import monitoring
 from deploymint.core.artifact_store import FILENAMES as ARTIFACT_FILENAMES
+from deploymint.core.credential_store import credential_status
 from deploymint.core.naming import slugify
 from deploymint.core.sandbox import SandboxError, list_workspace_dirs, validate_repo_path
 from deploymint.db.database import get_db
@@ -212,6 +214,18 @@ def run_page(request: Request, run_id: str, db: Session = Depends(get_db)):
 def costs_page(request: Request):
     breakdown = _sample_export_by_service()
     return templates.TemplateResponse(request, "costs.html", {"breakdown": breakdown})
+
+
+@router.get("/monitoring", response_class=HTMLResponse)
+def monitoring_page(request: Request, db: Session = Depends(get_db)):
+    """Global cloud credentials, fleet status, per-agent performance, and
+    cost — see docs/36-monitoring.md."""
+    return templates.TemplateResponse(
+        request, "monitoring.html",
+        {"credentials": credential_status(),
+         "fleet": monitoring.fleet_status(db),
+         "agent_stats": monitoring.agent_performance(db),
+         "cost_summary": monitoring.run_cost_summary(db)})
 
 
 # NOTE: this is intentionally /guide, not /docs — FastAPI's own /docs is its

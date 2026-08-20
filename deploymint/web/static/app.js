@@ -674,3 +674,87 @@ function wireCostForm() {
     );
   });
 }
+
+function wireMonitoring() {
+  // Cloud credentials: save/forget once, globally — see docs/36-monitoring.md.
+  const cloudSelect = document.getElementById("cred-cloud");
+  const saveBtn = document.getElementById("cred-save-btn");
+  const forgetBtn = document.getElementById("cred-forget-btn");
+  const errEl = document.getElementById("credential-error");
+  const recheckBtn = document.getElementById("recheck-btn");
+  if (!cloudSelect || !saveBtn) return;
+
+  cloudSelect.addEventListener("change", () => {
+    document.querySelectorAll(".cred-fields").forEach((el) => {
+      el.style.display = el.id === `cred-fields-${cloudSelect.value}` ? "" : "none";
+    });
+  });
+
+  function collectCredFields(cloud) {
+    if (cloud === "aws") {
+      return {
+        aws_access_key_id: document.getElementById("cred-aws-key").value,
+        aws_secret_access_key: document.getElementById("cred-aws-secret").value,
+        aws_session_token: document.getElementById("cred-aws-token").value,
+        aws_region: document.getElementById("cred-aws-region").value,
+      };
+    }
+    if (cloud === "azure") {
+      return {
+        azure_subscription_id: document.getElementById("cred-azure-sub").value,
+        azure_tenant_id: document.getElementById("cred-azure-tenant").value,
+        azure_client_id: document.getElementById("cred-azure-client").value,
+        azure_client_secret: document.getElementById("cred-azure-secret").value,
+      };
+    }
+    return {
+      gcp_project: document.getElementById("cred-gcp-project").value,
+      gcp_credentials_json: document.getElementById("cred-gcp-json").value,
+    };
+  }
+
+  saveBtn.addEventListener("click", async () => {
+    errEl.style.display = "none";
+    saveBtn.disabled = true;
+    const cloud = cloudSelect.value;
+    const r = await fetch(`/api/settings/credentials/${cloud}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(collectCredFields(cloud)),
+    });
+    saveBtn.disabled = false;
+    if (!r.ok) {
+      const body = await r.json().catch(() => ({}));
+      errEl.textContent = body.detail || r.statusText;
+      errEl.style.display = "";
+      return;
+    }
+    location.reload();
+  });
+
+  forgetBtn.addEventListener("click", async () => {
+    forgetBtn.disabled = true;
+    await fetch(`/api/settings/credentials/${cloudSelect.value}`, { method: "DELETE" });
+    location.reload();
+  });
+
+  if (recheckBtn) {
+    recheckBtn.addEventListener("click", async () => {
+      recheckBtn.disabled = true;
+      recheckBtn.textContent = "Rechecking…";
+      const r = await fetch("/api/monitoring/recheck", { method: "POST" });
+      const body = await r.json().catch(() => ({ results: {} }));
+      for (const [runId, healthy] of Object.entries(body.results || {})) {
+        const row = document.querySelector(`tr[data-run-id="${runId}"] .recheck-status`);
+        if (!row) continue;
+        const badge = row.querySelector(".badge");
+        if (badge) {
+          badge.className = `badge ${healthy ? "badge-ok" : "badge-fail"}`;
+          badge.textContent = healthy ? "running" : "unreachable";
+        }
+      }
+      recheckBtn.disabled = false;
+      recheckBtn.textContent = "Recheck now";
+    });
+  }
+}

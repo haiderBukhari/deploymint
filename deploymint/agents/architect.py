@@ -1,7 +1,16 @@
 """Architect Agent: deterministic repo analysis, plus one small optional LLM
-call for a plain-English summary. See docs/04-agents-spec.md §4.1 and
-docs/29-richer-reasoning.md."""
+call for a plain-English summary. See docs/04-agents-spec.md §4.1,
+docs/29-richer-reasoning.md, and docs/32-architect-thread-offload.md.
 
+The scan/parse/graph-build chain below is 100% synchronous CPU/disk work
+(tree-sitter parsing, networkx algorithms) — run()  offloads it to a worker
+thread via asyncio.to_thread, the same pattern core/docker_engine.py's
+build_image() already uses for its own blocking call. Without this, since
+the app runs as a single uvicorn worker, this chain running directly on the
+event loop freezes EVERY concurrently in-flight request — including a bare
+GET / with no relation to any run — for the scan's full duration."""
+
+import asyncio
 import json
 import sys
 from pathlib import Path
@@ -17,68 +26,83 @@ from deploymint.core.graph_builder import (
 )
 
 
+def _scan_and_analyze(root: Path) -> dict:
+    """The synchronous chain, unchanged in behavior from before — just
+    extracted so run() can offload it via asyncio.to_thread. Returns either
+    {"analysis": ..., "errors": [...]} or, on a walk failure,
+    {"analysis": _empty_analysis(), "errors": [...]}."""
+    errors: list[str] = []
+
+    try:
+        scan = repo_scanner.walk_repo(root)
+    except Exception as e:
+        return {"analysis": _empty_analysis(), "errors": [f"architect: walk failed: {e}"],
+                "walk_failed": True}
+
+    if scan.truncated:
+        errors.append(f"architect: truncated at {repo_scanner.MAX_FILES} files")
+
+    language, package_manager, manifest_path = repo_scanner.detect_language(root, scan.files)
+    framework = repo_scanner.detect_framework(language, manifest_path, root)
+    entrypoint = repo_scanner.find_entrypoint(root, language, scan.files)
+    exposed_port = repo_scanner.infer_port(root, framework, entrypoint)
+    dependencies = repo_scanner.detect_dependencies(language, manifest_path, root)
+    services = repo_scanner.detect_microservices(root)
+    has_tests = any("test" in str(f.relative_to(root)).lower() for f in scan.files)
+    dockerfile_exists = (root / "Dockerfile").exists()
+
+    graph = build_import_graph(root, scan.files, language)
+    critical_files = rank_criticality(graph)
+    cycles = find_cycles(graph)
+    if cycles:
+        errors.append("architect: circular import detected: " + " -> ".join(cycles[0]))
+
+    analysis = {
+        "language": language,
+        "framework": framework,
+        "package_manager": package_manager,
+        "entrypoint": entrypoint,
+        "exposed_port": exposed_port,
+        "python_version": f"{sys.version_info.major}.{sys.version_info.minor}",
+        "file_count": len(scan.files),
+        "dependencies": dependencies,
+        "services": services,
+        "graph": to_node_link(graph),
+        "critical_files": critical_files,
+        "has_tests": has_tests,
+        "dockerfile_exists": dockerfile_exists,
+        # Previously computed then discarded into an error string only —
+        # now persisted so a diagram/summary can reference it directly.
+        "cycles": cycles,
+    }
+    return {"analysis": analysis, "errors": errors}
+
+
 class ArchitectAgent(BaseAgent):
     name = "architect"
 
     async def run(self, state: DeployState) -> dict:
-        repo_path = state["repo_path"]
-        root = Path(repo_path)
-        errors: list[str] = []
+        root = Path(state["repo_path"])
 
-        try:
-            scan = repo_scanner.walk_repo(root)
-        except Exception as e:
+        scanned = await asyncio.to_thread(_scan_and_analyze, root)
+        if scanned.get("walk_failed"):
+            # Matches the original early-return exactly: no architect.done
+            # emit, no summarize call, on a walk failure.
             return {
-                "analysis": _empty_analysis(),
-                "errors": state.get("errors", []) + [f"architect: walk failed: {e}"],
+                "analysis": scanned["analysis"],
+                "errors": state.get("errors", []) + scanned["errors"],
             }
 
-        if scan.truncated:
-            errors.append(f"architect: truncated at {repo_scanner.MAX_FILES} files")
-
-        language, package_manager, manifest_path = repo_scanner.detect_language(root, scan.files)
-        framework = repo_scanner.detect_framework(language, manifest_path, root)
-        entrypoint = repo_scanner.find_entrypoint(root, language, scan.files)
-        exposed_port = repo_scanner.infer_port(root, framework, entrypoint)
-        dependencies = repo_scanner.detect_dependencies(language, manifest_path, root)
-        services = repo_scanner.detect_microservices(root)
-        has_tests = any("test" in str(f.relative_to(root)).lower() for f in scan.files)
-        dockerfile_exists = (root / "Dockerfile").exists()
-
-        graph = build_import_graph(root, scan.files, language)
-        critical_files = rank_criticality(graph)
-        cycles = find_cycles(graph)
-        if cycles:
-            errors.append(
-                "architect: circular import detected: " + " -> ".join(cycles[0])
-            )
-
-        analysis = {
-            "language": language,
-            "framework": framework,
-            "package_manager": package_manager,
-            "entrypoint": entrypoint,
-            "exposed_port": exposed_port,
-            "python_version": f"{sys.version_info.major}.{sys.version_info.minor}",
-            "file_count": len(scan.files),
-            "dependencies": dependencies,
-            "services": services,
-            "graph": to_node_link(graph),
-            "critical_files": critical_files,
-            "has_tests": has_tests,
-            "dockerfile_exists": dockerfile_exists,
-            # Previously computed then discarded into an error string only —
-            # now persisted so a diagram/summary can reference it directly.
-            "cycles": cycles,
-        }
+        analysis = scanned["analysis"]
+        errors = scanned["errors"]
         analysis["architecture_summary"] = await self._summarize(analysis)
 
         await self.emit(
             "architect.done",
-            language=language,
-            framework=framework,
-            file_count=len(scan.files),
-            entrypoint=entrypoint,
+            language=analysis["language"],
+            framework=analysis["framework"],
+            file_count=analysis["file_count"],
+            entrypoint=analysis["entrypoint"],
         )
 
         result: dict = {"analysis": analysis}

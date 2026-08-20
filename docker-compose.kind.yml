@@ -1,0 +1,31 @@
+# Opt-in override enabling real local Kubernetes cluster auto-provisioning
+# (kube_engine.ensure_kind_cluster, see docs/35-kind-cluster.md). Apply with:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.kind.yml up -d --build
+#
+# Linux hosts only. `kind create cluster`'s control-plane container is
+# reachable via the existing /var/run/docker.sock mount fine (same as
+# `docker build`/`docker run`), but kind's generated kubeconfig points
+# `server:` at an address that must be reachable via TCP from *inside* this
+# container — `network_mode: host` gives it that on Linux. Docker Desktop on
+# macOS/Windows runs the daemon inside a VM, so host networking there does
+# NOT give the same reachability as on native Linux — on those platforms,
+# `enable_auto_kind_cluster` will fail closed to the existing `docker run`
+# fallback (never hangs, never errors the run) rather than actually working;
+# keep using your own pre-existing kind/Docker-Desktop-Kubernetes cluster via
+# the unchanged detection-only path instead (docker-compose.yml, unmodified).
+#
+# network_mode: host also drops this container off the default Compose
+# bridge network, so `db`'s service-name DNS (the plain docker-compose.yml's
+# `DATABASE_URL=...@db:5432/...`) no longer resolves — this override
+# publishes `db` to localhost and repoints DATABASE_URL there instead.
+services:
+  app:
+    network_mode: host
+    environment:
+      DATABASE_URL: postgresql+psycopg://deploymint:deploymint@localhost:5432/deploymint
+      DEPLOYMINT_ENABLE_AUTO_KIND_CLUSTER: "true"
+
+  db:
+    ports:
+      - "127.0.0.1:5432:5432"

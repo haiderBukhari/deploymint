@@ -1,3 +1,4 @@
+import threading
 from unittest.mock import patch
 
 import pytest
@@ -83,6 +84,33 @@ async def test_architecture_summary_degrades_to_empty_string_on_llm_failure(samp
         result = await ArchitectAgent().run({"repo_path": str(sample_repo), "errors": []})
     assert result["analysis"]["architecture_summary"] == ""
     assert result["analysis"]["language"] == "python"
+
+
+@pytest.mark.asyncio
+async def test_scan_runs_off_the_event_loop_thread(sample_repo):
+    """Regression test: the whole synchronous scan/parse/graph-build chain
+    used to run directly on the event loop — since the app is a single
+    uvicorn worker, this froze every concurrently in-flight request
+    (including a bare GET /) for the scan's full duration. It must now run
+    via asyncio.to_thread, i.e. NOT on the main thread. See
+    docs/32-architect-thread-offload.md."""
+    from deploymint.agents import architect as architect_module
+
+    seen_threads = []
+    real_scan = architect_module._scan_and_analyze
+
+    def spy(root):
+        seen_threads.append(threading.current_thread())
+        return real_scan(root)
+
+    with patch("deploymint.agents.architect._scan_and_analyze", side_effect=spy):
+        await ArchitectAgent().run({"repo_path": str(sample_repo), "errors": []})
+
+    assert seen_threads, "the scan function was never called"
+    assert seen_threads[0] is not threading.main_thread(), (
+        "the scan ran on the main/event-loop thread — asyncio.to_thread "
+        "offload is missing or was bypassed"
+    )
 
 
 @pytest.mark.asyncio

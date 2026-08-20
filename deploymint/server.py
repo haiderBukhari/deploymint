@@ -10,7 +10,19 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
 from deploymint import __version__
-from deploymint.api import approvals, chat, cloud_deploy, costs, fixes, health, projects, runs, ws
+from deploymint.api import (
+    approvals,
+    chat,
+    cloud_deploy,
+    costs,
+    fixes,
+    health,
+    monitoring,
+    projects,
+    runs,
+    settings,
+    ws,
+)
 from deploymint.db.database import init_db
 from deploymint.web import routes as web_routes
 
@@ -34,6 +46,8 @@ def create_app() -> FastAPI:
     app.include_router(approvals.router)
     app.include_router(chat.router)
     app.include_router(costs.router)
+    app.include_router(settings.router)
+    app.include_router(monitoring.router)
     app.include_router(web_routes.router)
     app.mount("/static", StaticFiles(directory=str(WEB_DIR / "static")), name="static")
     return app

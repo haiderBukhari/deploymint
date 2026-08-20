@@ -802,3 +802,12 @@ tr:last-child td { border-bottom: none; }
   .docs-layout { grid-template-columns: 1fr; }
   .docs-sidebar { position: static; max-height: none; }
 }
+
+/* Monitoring page — hand-rolled SVG bar charts, no charting library
+   (this project vendors no CDN dependencies). See docs/36-monitoring.md. */
+.agent-perf-chart { display: flex; flex-direction: column; gap: var(--sp-2); }
+.agent-perf-row { display: grid; grid-template-columns: 90px 1fr 140px; align-items: center; gap: var(--sp-3); }
+.agent-perf-label { font-size: var(--text-sm); color: var(--text); text-transform: capitalize; }
+.agent-perf-bar { width: 100%; height: 22px; border-radius: 4px; overflow: hidden; }
+.agent-perf-value { font-size: var(--text-sm); color: var(--muted); white-space: nowrap; }
+.cred-fields .form-row { margin-bottom: 0.5rem; }

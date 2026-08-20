@@ -11,6 +11,9 @@ services:
       DEPLOYMINT_LLM_BASE_URL: ${DEPLOYMINT_LLM_BASE_URL:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       DEPLOYMINT_KUBE_CONTEXT: ${KUBE_CONTEXT:-}
+      # Encrypts cloud credentials saved from the Monitoring page — required
+      # only if you use that feature. See .env.example.
+      DEPLOYMINT_SECRET_KEY: ${DEPLOYMINT_SECRET_KEY:-}
       # Optional — live AWS Cost Explorer instead of the bundled sample data.
       # Blank is fine; see .env.example.
       AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}

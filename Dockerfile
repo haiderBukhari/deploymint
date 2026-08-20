@@ -17,6 +17,14 @@ RUN curl -Lo /usr/local/bin/opa \
         "https://openpolicyagent.org/downloads/${OPA_VERSION}/opa_linux_amd64_static" \
     && chmod +x /usr/local/bin/opa
 
+# kind — pinned version. Only used when DEPLOYMINT_ENABLE_AUTO_KIND_CLUSTER=true
+# (default off — see docs/35-kind-cluster.md); lets a local deploy actually run
+# on a real Kubernetes cluster instead of falling back to plain `docker run`.
+ARG KIND_VERSION=v0.32.0
+RUN curl -Lo /usr/local/bin/kind \
+        "https://kind.sigs.k8s.io/dl/${KIND_VERSION}/kind-linux-amd64" \
+    && chmod +x /usr/local/bin/kind
+
 # docker CLI only (client) — talks to the mounted host socket, no daemon needed here
 RUN curl -fsSL https://download.docker.com/linux/static/stable/x86_64/docker-27.3.1.tgz \
         | tar xz -C /usr/local/bin --strip-components=1 docker/docker

@@ -9,6 +9,7 @@ from pathlib import Path
 
 from deploymint.agents.base import BaseAgent
 from deploymint.agents.state import DeployState
+from deploymint.config import get_settings
 from deploymint.core import docker_engine, docker_run, kube_engine
 from deploymint.core.audit import AuditChain
 from deploymint.core.tmux_recorder import TmuxRecorder
@@ -53,7 +54,31 @@ class ExecutionEngineAgent(BaseAgent):
                                output=dep["build_log"][-8000:], exit_code=0)
 
             dep["status"] = "deploying"
-            if await kube_engine.cluster_reachable(**kw):
+            # deploy_mode is the approval-gate knob (docs/33) that was
+            # collected in the UI but never actually read here — "docker run
+            # only" had zero effect. Now: "docker" always short-circuits
+            # straight to docker run regardless of cluster reachability
+            # (explicit user choice); "kubernetes" (the default) keeps
+            # today's implicit reachability check, optionally trying to
+            # auto-provision a local kind cluster first if none is reachable
+            # and the user has opted into that (see docs/35-kind-cluster.md
+            # — off by default, since it silently turns a near-instant
+            # docker-run fallback into a much heavier, Linux-only operation
+            # for anyone who never asked for it).
+            approved_plan = state.get("approved_plan") or {}
+            deploy_mode = approved_plan.get("deploy_mode", "kubernetes")
+            reachable = await kube_engine.cluster_reachable(**kw)
+            should_provision = (
+                not reachable and deploy_mode == "kubernetes"
+                and get_settings().enable_auto_kind_cluster
+            )
+            if should_provision:
+                await self.emit("execution.stage", stage="kind_provision")
+                await self._mark("no cluster reachable — creating local kind cluster...")
+                if await kube_engine.ensure_kind_cluster("deploymint", **kw):
+                    reachable = await kube_engine.cluster_reachable(**kw)
+
+            if reachable and deploy_mode != "docker":
                 dep["mode"] = "kubernetes"
                 cluster = await kube_engine.kind_cluster_name()
                 if cluster:
