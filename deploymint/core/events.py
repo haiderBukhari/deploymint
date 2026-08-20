@@ -11,9 +11,16 @@ class EventBus:
     Supports multiple subscribers so two browser tabs on the same run both get
     the full stream."""
 
-    def __init__(self, run_id: str):
+    def __init__(self, run_id: str, start_seq: int = 0):
         self.run_id = run_id
-        self.seq = 0
+        # A resumed run (the architecture approval gate) reuses the same
+        # run_id across two phases — a fresh bus starting back at seq=0
+        # collides with every seq the first phase already persisted,
+        # silently failing every INSERT (swallowed by emit()'s broad
+        # except below) for the entire resumed phase. start_seq lets the
+        # caller continue numbering instead. See
+        # docs/33-deploy-lock-and-findings.md.
+        self.seq = start_seq
         self._sinks: list = []  # async callables persisted by RunManager
         self._subscribers: list[asyncio.Queue] = []
         self.closed = False
@@ -66,8 +73,8 @@ class BusRegistry:
     def __init__(self):
         self._buses: dict[str, EventBus] = {}
 
-    def create(self, run_id: str) -> EventBus:
-        bus = EventBus(run_id)
+    def create(self, run_id: str, start_seq: int = 0) -> EventBus:
+        bus = EventBus(run_id, start_seq=start_seq)
         self._buses[run_id] = bus
         return bus
 

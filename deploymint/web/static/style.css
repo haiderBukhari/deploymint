@@ -481,6 +481,8 @@ tr:last-child td { border-bottom: none; }
 .sev-medium { color: var(--amber); font-weight: 600; }
 .sev-low, .sev-info { color: var(--muted); }
 .explanation { color: var(--muted); font-size: 0.83rem; margin-top: 0.2rem; }
+.findings-group { margin-top: var(--sp-3); }
+.findings-group .section-label { font-size: 0.82rem; margin-bottom: 0.2rem; }
 
 /* --- AI fix suggestion per finding (see docs/28-ai-fix.md) --- */
 .finding-actions { display: flex; gap: var(--sp-2); margin-top: var(--sp-2); }

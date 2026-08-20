@@ -47,10 +47,13 @@ class Settings(BaseSettings):
     # security
     block_severity: str = "critical"  # critical | high | medium
     enable_redteam: bool = True
-    # Real CVE scanning (dependencies + the built image), on top of Checkov/OPA's
-    # misconfiguration checks. Degrades to today's behavior when the trivy
-    # binary isn't installed — see core/scanners.py's never-raise contract.
-    enable_trivy: bool = True
+    # An LLM-driven checklist audit of the user's actual source code (secrets,
+    # missing auth, injection risk, etc.) — replaces a dependency-CVE scanner
+    # (Trivy, then Grype) that was tried and dropped: too slow to bootstrap
+    # (a large vulnerability DB had to download before the first scan could
+    # run at all) and too noisy (200+ mostly base-OS-package findings nobody
+    # could act on). See docs/34-code-audit.md.
+    enable_code_audit: bool = True
     # Pause after the Architect node with status="awaiting_approval", showing
     # the user the architecture diagram + a plan with editable knobs before
     # generation proceeds. See docs/33-deploy-lock-and-findings.md.

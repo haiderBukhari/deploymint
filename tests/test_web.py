@@ -299,7 +299,7 @@ def test_run_page_shows_critical_high_findings_and_collapses_the_rest(
                 "file": "-", "message": "bad", "remediation": ""}]
     findings += [
         {"id": f"INFO-{i}", "severity": "info", "source": "trivy",
-         "file": "-", "message": f"noise {i}", "remediation": ""}
+         "package_type": "os", "file": "-", "message": f"noise {i}", "remediation": ""}
         for i in range(50)
     ]
     _set_run_fields(run_id, security={
@@ -311,12 +311,43 @@ def test_run_page_shows_critical_high_findings_and_collapses_the_rest(
     r = client.get(f"/runs/{run_id}")
     assert "CRIT-1" in r.text
     assert "1 critical" in r.text
-    assert "50 lower-severity finding(s)" in r.text
-    assert r.text.count("INFO-0") == 1
-    # The critical finding must appear before the <details> collapse block
-    # that contains the low/info noise — i.e. it's rendered unconditionally,
-    # not buried inside the collapsed section alongside INFO-0.
-    assert r.text.index("CRIT-1") < r.text.index("INFO-0")
+    assert "50 finding(s) inherited from the base image" in r.text
+
+
+def test_run_page_shows_your_dependencies_findings_open_not_collapsed(
+    client, registered_project
+):
+    """A finding on a project's own dependency (Trivy package_type=library, or
+    any Checkov/OPA finding with no package_type at all) must render in the
+    open 'Your dependencies' section, not buried in the base-image toggle —
+    that's the whole point of the split: surface what's actually actionable."""
+    run_id = client.post(
+        f"/api/projects/{registered_project['id']}/runs", json={"skip_deploy": True}
+    ).json()["run_id"]
+    _wait_for_status(client, run_id)
+
+    findings = [
+        {"id": "CVE-DEP-1", "severity": "medium", "source": "trivy",
+         "package_type": "library", "file": "-", "message": "starlette CVE", "remediation": ""},
+        {"id": "CKV_1", "severity": "medium", "source": "checkov",
+         "file": "-", "message": "misconfig", "remediation": ""},
+        {"id": "OS-1", "severity": "medium", "source": "trivy",
+         "package_type": "os", "file": "-", "message": "glibc CVE", "remediation": ""},
+    ]
+    _set_run_fields(run_id, security={
+        "passed": True, "findings": findings, "checkov_ran": True, "opa_ran": True,
+        "redteam_ran": True, "counts": {"critical": 0, "high": 0, "medium": 3,
+                                        "low": 0, "info": 0},
+    })
+
+    r = client.get(f"/runs/{run_id}")
+    assert "Your dependencies" in r.text
+    assert "CVE-DEP-1" in r.text
+    assert "CKV_1" in r.text
+    assert "1 finding(s) inherited from the base image" in r.text
+    # OS-1 (package_type=os) must be in the collapsed section, not the open
+    # "Your dependencies" one — that's the whole point of the split.
+    assert r.text.index("CKV_1") < r.text.index("OS-1")
 
 
 def test_run_page_404s_for_unknown_run(client):

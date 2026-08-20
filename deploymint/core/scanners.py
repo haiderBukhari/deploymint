@@ -149,86 +149,11 @@ async def run_opa(artifacts: dict) -> tuple[list[dict], str | None]:
     return all_findings, ("; ".join(errors) or None)
 
 
-# Trivy fills the one gap Checkov/OPA don't cover: real, versioned CVEs in
-# actual dependencies and OS packages — Checkov/OPA only catch
-# *misconfigurations* (a privileged container, a missing digest pin), never
-# "this exact version of requests has a known RCE". Unlike CHECKOV_SEVERITY
-# above (a hand-maintained map, because free-tier Checkov emits none), Trivy
-# reports its own `Severity` per finding — this just needs lowercasing.
-TRIVY_SEVERITY = {"CRITICAL": "critical", "HIGH": "high", "MEDIUM": "medium",
-                  "LOW": "low", "UNKNOWN": "info"}
-
-
-def trivy_available() -> bool:
-    return shutil.which("trivy") is not None
-
-
-def _trivy_findings_from_results(results: list[dict], *, source_tag: str) -> list[dict]:
-    findings = []
-    for result in results or []:
-        target = result.get("Target", "")
-        for vuln in result.get("Vulnerabilities") or []:
-            cve = vuln.get("VulnerabilityID", "CVE_UNKNOWN")
-            pkg = vuln.get("PkgName", "")
-            installed = vuln.get("InstalledVersion", "")
-            fixed = vuln.get("FixedVersion", "")
-            remediation = (
-                f"Upgrade {pkg} to {fixed}." if fixed
-                else f"No fixed version published yet for {pkg} {installed}."
-            )
-            findings.append({
-                "id": cve,
-                "severity": TRIVY_SEVERITY.get(vuln.get("Severity", "").upper(), "info"),
-                "source": "trivy",
-                "file": Path(target).name or target,
-                "message": f"{pkg} {installed}: {vuln.get('Title') or cve}",
-                "remediation": remediation,
-            })
-        for mc in result.get("Misconfigurations") or []:
-            findings.append({
-                "id": mc.get("ID", "TRIVY_MISCONFIG"),
-                "severity": TRIVY_SEVERITY.get((mc.get("Severity") or "").upper(), "info"),
-                "source": "trivy",
-                "file": Path(target).name or target,
-                "message": mc.get("Title") or mc.get("Message", ""),
-                "remediation": mc.get("Resolution") or "See the Trivy docs for this check.",
-            })
-    return findings
-
-
-async def _run_trivy(args: list[str], *, timeout: int = 300) -> tuple[list[dict], str | None]:
-    if not trivy_available():
-        return [], "trivy not installed (see aquasecurity/trivy)"
-
-    proc = await asyncio.create_subprocess_exec(
-        "trivy", *args, "--format", "json", "--quiet",
-        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-    )
-    try:
-        out, err = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-    except TimeoutError:
-        proc.kill()
-        return [], f"trivy timed out after {timeout}s"
-
-    if proc.returncode != 0:
-        return [], f"trivy exited {proc.returncode}: {err.decode()[:300]}"
-
-    try:
-        data = json.loads(out.decode() or "{}")
-    except json.JSONDecodeError as e:
-        return [], f"could not parse trivy output: {e}"
-
-    return _trivy_findings_from_results(data.get("Results") or [], source_tag="trivy"), None
-
-
-async def run_trivy_fs(directory: Path) -> tuple[list[dict], str | None]:
-    """Filesystem/config scan of the generated artifacts directory — dependency
-    manifests and IaC misconfigurations, run alongside Checkov/OPA in the
-    Warden's existing pre-deploy slot."""
-    return await _run_trivy(["fs", str(directory)])
-
-
-async def run_trivy_image(image_tag: str) -> tuple[list[dict], str | None]:
-    """CVE scan of the actual built image — only possible after Execution has
-    built it, so this runs from a separate graph node, not the Warden."""
-    return await _run_trivy(["image", image_tag], timeout=300)
+# Dependency/image CVE scanning (Trivy, then Grype) was tried and dropped —
+# see docs/30-trivy.md for the full history. Both required a large
+# vulnerability database to download before the first scan could even run,
+# and even once bootstrapped, produced 200+ findings that were almost
+# entirely low-severity noise in base OS packages (glibc, perl, util-linux)
+# nobody could act on quickly. Replaced by agents/code_audit.py — an
+# LLM-driven checklist over the user's actual source code, not a signature
+# database. See docs/34-code-audit.md.

@@ -1,6 +1,6 @@
 """Every prompt template, versioned in one file. See docs/06-phase-2-generation.md §2.3."""
 
-PROMPT_VERSION = "2026.08.14-1"
+PROMPT_VERSION = "2026.08.20-1"
 
 HARD_REQUIREMENTS = """\
 1.  Multi-stage build where the language supports it.
@@ -113,6 +113,43 @@ scanner covers those. Report only genuine security concerns.
 
 Return ONLY a JSON object:
 {"findings": [{"id":"RT_LLM_001","severity":"critical|high|medium|low",
+               "message":"...","remediation":"..."}]}
+
+If you find nothing, return {"findings": []}. An empty list is a valid, expected answer.
+"""
+
+CODE_AUDIT_SYSTEM = """You are a security auditor reviewing a user's actual application
+source code before it gets deployed — not the generated Dockerfile/K8s/Terraform
+(other checks already cover those), the real code being containerized and shipped.
+
+Check specifically for these categories, tailored to what a small deployed service
+actually risks:
+- Hardcoded secrets, API keys, or credentials in source (not env-var references —
+  literal-looking values)
+- A committed .env or config file with real-looking values (not a .env.example
+  template with placeholder values)
+- An exposed HTTP endpoint/route with no authentication or authorization check
+- SQL injection risk: a query built via string concatenation/formatting instead of
+  parameterized queries or an ORM
+- Wildcard CORS (Access-Control-Allow-Origin: * or equivalent) on anything besides a
+  clearly public read-only endpoint
+- Debug mode or verbose stack-trace error pages left enabled for production
+- Insecure file-upload handling (no type/size validation, path traversal risk)
+- Weak password hashing (plain MD5/SHA1/unsalted hashes instead of bcrypt/argon2/scrypt)
+- A dependency name that looks like a typosquat of a well-known package (compare
+  against the dependency list given below)
+
+Do NOT report container/K8s misconfiguration, base-image pinning, or supply-chain
+patterns in generated artifacts — other scanners already cover those. Report only
+things found in the actual source files provided below.
+
+For each finding, give the real file path and line number from what's shown below —
+never invent a location, and never repeat the same finding for the same file/line
+twice.
+
+Return ONLY a JSON object:
+{"findings": [{"id":"CA_001","severity":"critical|high|medium|low",
+               "file":"path/to/file.py","line":42,
                "message":"...","remediation":"..."}]}
 
 If you find nothing, return {"findings": []}. An empty list is a valid, expected answer.

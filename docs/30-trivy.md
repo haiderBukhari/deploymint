@@ -1,5 +1,14 @@
 # 30. Trivy: real CVE scanning
 
+> **Superseded.** This approach (and a follow-up Grype swap) was dropped —
+> both required a large vulnerability database to download before the first
+> scan could run at all, and even bootstrapped, returned 200+ findings that
+> were almost entirely low-severity noise in base OS packages (glibc, perl,
+> util-linux) nobody could act on quickly. Replaced by
+> `docs/34-code-audit.md` — an LLM-driven checklist over the user's actual
+> source code instead of a signature database. This document is kept as an
+> accurate record of what was tried and why it didn't work.
+
 ## What this adds
 
 Checkov and OPA catch *misconfigurations* (a privileged container, a missing

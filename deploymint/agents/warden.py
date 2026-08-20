@@ -12,6 +12,23 @@ from deploymint.core.artifact_store import write_artifacts
 SEVERITY_ORDER = ["critical", "high", "medium", "low", "info"]
 EXPLAIN_SEVERITIES = {"critical", "high"}
 
+# An LLM alone never blocks a deploy — a strong model is still a model, and the
+# trust boundary in 01-architecture.md §1.9 (LLM writes/explains, deterministic
+# code decides) is what this cap enforces in code. Shared by every agent whose
+# findings come from an LLM call (redteam.py, code_audit.py) rather than a
+# deterministic scanner, so the clamp is applied identically everywhere.
+LLM_SEVERITY_CAP = {"critical": "high"}
+
+
+def clamp_llm_severity(raw: object) -> str:
+    """Normalize + clamp an LLM-reported severity. Always lowercases first,
+    then clamps critical -> high, then validates against SEVERITY_ORDER —
+    anything still unrecognized (including None/empty) becomes "low" rather
+    than silently vanishing from the gate. See docs/32-redteam-fixes.md."""
+    sev = str(raw or "").strip().lower()
+    sev = LLM_SEVERITY_CAP.get(sev, sev)
+    return sev if sev in SEVERITY_ORDER else "low"
+
 
 async def _explain(finding: dict) -> str:
     """One-sentence plain-language risk explanation for a single finding. Never
@@ -53,14 +70,6 @@ class SecurityWardenAgent(BaseAgent):
         findings = ck_findings + opa_findings
 
         checkov_ran, opa_ran = ck_err is None, opa_err is None
-        # Trivy is additive coverage (real CVEs, not misconfigurations) — its
-        # absence alone must not trip the fail-closed gate below when Checkov
-        # or OPA are still working.
-        trivy_ran = False
-        if s.enable_trivy:
-            tv_findings, tv_err = await scanners.run_trivy_fs(directory)
-            trivy_ran = tv_err is None
-            findings += tv_findings
 
         await _add_explanations(findings)
         for f in findings:
@@ -71,17 +80,13 @@ class SecurityWardenAgent(BaseAgent):
         # it regardless of which branch below returns.
         counts = {lvl: sum(1 for f in findings if f["severity"] == lvl) for lvl in SEVERITY_ORDER}
 
-        ran_flags = [checkov_ran, opa_ran] + ([trivy_ran] if s.enable_trivy else [])
-        if not any(ran_flags):
-            reasons = [f"checkov: {ck_err}", f"opa: {opa_err}"]
-            if s.enable_trivy:
-                reasons.append(f"trivy: {tv_err}")
+        if not checkov_ran and not opa_ran:
             report = {
                 "passed": False, "findings": findings,
                 "checkov_ran": False, "opa_ran": False, "redteam_ran": False,
-                "trivy_ran": False, "counts": counts,
+                "counts": counts,
                 "blocked_reason": "No security scanner available — failing closed. "
-                                  + "; ".join(reasons),
+                                  f"checkov: {ck_err}; opa: {opa_err}",
             }
             await self.emit("warden.done", passed=False, critical=0, high=0, medium=0, low=0)
             return {"security": report}
@@ -94,7 +99,7 @@ class SecurityWardenAgent(BaseAgent):
         report = {
             "passed": passed, "findings": findings,
             "checkov_ran": checkov_ran, "opa_ran": opa_ran, "redteam_ran": False,
-            "trivy_ran": trivy_ran, "counts": counts,
+            "counts": counts,
         }
         if not passed:
             top = blockers[0]

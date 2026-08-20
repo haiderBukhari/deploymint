@@ -1,15 +1,16 @@
 """The full LangGraph StateGraph: architect -> smith -> warden -> [redteam] ->
-gate -> execution -> [oracle -> remediator] -> finops -> END. See
-docs/09-phase-5-orchestration.md §5.1 and docs/10-phase-6-finops-ui.md §6.1-6.3."""
+[code_audit] -> gate -> execution -> [oracle -> remediator] -> finops -> END.
+See docs/09-phase-5-orchestration.md §5.1 and docs/10-phase-6-finops-ui.md
+§6.1-6.3 and docs/34-code-audit.md."""
 
 import time
 
 from langgraph.graph import END, StateGraph
 
 from deploymint.agents.architect import ArchitectAgent
+from deploymint.agents.code_audit import CodeAuditAgent
 from deploymint.agents.execution import ExecutionEngineAgent
 from deploymint.agents.finops import FinOpsAgent
-from deploymint.agents.image_scan import ImageScanAgent
 from deploymint.agents.oracle import ObservabilityOracleAgent
 from deploymint.agents.redteam import RedTeamAgent
 from deploymint.agents.smith import ArtifactSmithAgent
@@ -79,12 +80,21 @@ def build_graph(bus=None, *, skip_deploy: bool = False, stop_after_architect: bo
     g.add_edge("architect", "smith")
     g.add_edge("smith", "warden")
 
+    gate_source = "warden"
     if s.enable_redteam:
         g.add_node("redteam", _wrap(RedTeamAgent(bus)))
         g.add_edge("warden", "redteam")
         gate_source = "redteam"
-    else:
-        gate_source = "warden"
+
+    # Code Audit reads the user's actual source files (not the generated
+    # artifacts Red Team probes) against a DeployMint-specific checklist —
+    # hardcoded secrets, missing auth, injection risk, etc. Replaces the
+    # Trivy/Grype dependency-CVE scanner that was tried and dropped (too
+    # slow to bootstrap, too noisy). See docs/34-code-audit.md.
+    if s.enable_code_audit:
+        g.add_node("code_audit", _wrap(CodeAuditAgent(bus)))
+        g.add_edge(gate_source, "code_audit")
+        gate_source = "code_audit"
 
     if skip_deploy:
         g.add_conditional_edges(gate_source, security_gate,
@@ -94,19 +104,7 @@ def build_graph(bus=None, *, skip_deploy: bool = False, stop_after_architect: bo
         g.add_node("oracle", _wrap(ObservabilityOracleAgent(bus)))
         g.add_conditional_edges(gate_source, security_gate,
                                 {"execute": "execution", "blocked": "blocked"})
-
-        # Image scanning needs the built image, which only exists after
-        # Execution — a different graph position than the Warden's
-        # pre-deploy slot. Never blocks: the deploy already happened, so a
-        # CVE found here surfaces for the next run/fix cycle instead.
-        if s.enable_trivy:
-            g.add_node("image_scan", _wrap(ImageScanAgent(bus)))
-            g.add_edge("execution", "image_scan")
-            post_execution_source = "image_scan"
-        else:
-            post_execution_source = "execution"
-
-        g.add_conditional_edges(post_execution_source, post_execution,
+        g.add_conditional_edges("execution", post_execution,
                                 {"observe": "oracle", "finops": "finops"})
         g.add_edge("oracle", "finops")
 

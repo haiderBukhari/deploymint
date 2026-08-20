@@ -2,7 +2,7 @@ from unittest.mock import patch
 
 import pytest
 
-from deploymint.agents.redteam import RedTeamAgent, _clamp_llm_severity
+from deploymint.agents.redteam import RedTeamAgent
 
 
 class _NoLLM:
@@ -103,24 +103,8 @@ async def test_llm_layer_findings_survive_uppercase_severity():
     assert sec["passed"] is True
 
 
-class TestClampLlmSeverity:
-    def test_lowercase_critical_clamps_to_high(self):
-        assert _clamp_llm_severity("critical") == "high"
-
-    def test_uppercase_critical_clamps_to_high(self):
-        assert _clamp_llm_severity("CRITICAL") == "high"
-
-    def test_mixed_case_recognized_severity_passes_through_lowercased(self):
-        assert _clamp_llm_severity("Medium") == "medium"
-
-    def test_unknown_value_becomes_low_not_dropped(self):
-        assert _clamp_llm_severity("YIKES") == "low"
-
-    def test_none_becomes_low(self):
-        assert _clamp_llm_severity(None) == "low"
-
-    def test_empty_string_becomes_low(self):
-        assert _clamp_llm_severity("") == "low"
+# TestClampLlmSeverity moved to test_warden.py — clamp_llm_severity now
+# lives in warden.py, shared by redteam.py and code_audit.py.
 
 
 @pytest.mark.asyncio

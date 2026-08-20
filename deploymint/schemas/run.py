@@ -3,7 +3,13 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, computed_field
 
-RunStatus = Literal["pending", "running", "success", "failed", "blocked", "cancelled"]
+RunStatus = Literal[
+    "pending", "running", "success", "failed", "blocked", "cancelled",
+    # A run paused here after Architect, waiting on POST /api/runs/{id}/approve
+    # to resume with the user's approved plan/knobs. See
+    # docs/33-deploy-lock-and-findings.md.
+    "awaiting_approval",
+]
 
 # Per-1M-token pricing (input, output) in USD, keyed by model prefix — a run's
 # actual model_used decides which row applies, so switching providers (e.g.

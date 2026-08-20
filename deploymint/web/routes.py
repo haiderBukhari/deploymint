@@ -169,18 +169,28 @@ _SEVERITY_ORDER = ("critical", "high", "medium", "low", "info")
 _PROMINENT_SEVERITIES = ("critical", "high")
 
 
-def _split_by_severity(run: Run) -> tuple[list[dict], list[dict]]:
-    """Splits a run's findings into (critical_high, rest) — a real run can
-    return 200+ low/info-severity base-image CVEs alongside a handful of
-    critical/high ones; dumping all of them in one flat list buries the
-    signal. Both lists are sorted critical-first. See
+def _split_by_severity(run: Run) -> tuple[list[dict], list[dict], list[dict]]:
+    """Splits a run's findings into (critical_high, your_deps, base_image) — a
+    real run can return 200+ CVEs against base-image OS packages (glibc,
+    util-linux, perl-base...) the user never chose and can't patch except by
+    bumping the base image, alongside a handful of critical/high findings and
+    a handful of CVEs in the project's own dependencies that ARE actionable
+    (bump requirements.txt). Dumping all of them in one flat list buries the
+    signal and reads as "your code is broken" when it's mostly inherited
+    noise. All three lists are sorted critical-first. See
     docs/33-deploy-lock-and-findings.md."""
     findings = (run.security or {}).get("findings", [])
     order = {lvl: i for i, lvl in enumerate(_SEVERITY_ORDER)}
     findings = sorted(findings, key=lambda f: order.get(f.get("severity"), 99))
     critical_high = [f for f in findings if f.get("severity") in _PROMINENT_SEVERITIES]
-    rest = [f for f in findings if f.get("severity") not in _PROMINENT_SEVERITIES]
-    return critical_high, rest
+    non_prominent = [f for f in findings if f.get("severity") not in _PROMINENT_SEVERITIES]
+    # Checkov/OPA findings (no package_type — they scan generated files, not
+    # packages) and Trivy library-type findings are both things the user can
+    # actually fix in this repo; only Trivy os-pkgs findings are base-image
+    # inherited noise.
+    base_image = [f for f in non_prominent if f.get("package_type") == "os"]
+    your_deps = [f for f in non_prominent if f.get("package_type") != "os"]
+    return critical_high, your_deps, base_image
 
 
 @router.get("/runs/{run_id}", response_class=HTMLResponse)
@@ -189,12 +199,13 @@ def run_page(request: Request, run_id: str, db: Session = Depends(get_db)):
     if not r:
         return HTMLResponse("Run not found", status_code=404)
     project = db.get(Project, r.project_id)
-    critical_high, rest = _split_by_severity(r)
+    critical_high, your_deps, base_image = _split_by_severity(r)
     return templates.TemplateResponse(
         request, "run.html",
         {"run": r, "project": project, "project_name": project.name if project else "?",
          "nodes": NODES, "fixable_files": _fixable_files(r),
-         "critical_high_findings": critical_high, "rest_findings": rest})
+         "critical_high_findings": critical_high, "your_deps_findings": your_deps,
+         "base_image_findings": base_image})
 
 
 @router.get("/costs", response_class=HTMLResponse)

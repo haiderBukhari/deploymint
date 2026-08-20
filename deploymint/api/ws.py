@@ -48,6 +48,14 @@ async def stream_run(ws: WebSocket, run_id: str):
             rows = (db.query(Event).filter(Event.run_id == run_id, Event.seq > since)
                     .order_by(Event.seq).all())
             for r in rows:
+                # run.end is a terminal MARKER, not a log line — replaying a
+                # stale one from a previous phase (e.g. the architect-only
+                # phase before an approval-gate resume) makes the client
+                # think the run just finished again and reload, forever.
+                # The one true run.end is synthesized below from the run's
+                # CURRENT status instead, exactly once.
+                if r.type == "run.end":
+                    continue
                 await ws.send_json({"seq": r.seq, "type": r.type,
                                     "payload": r.payload, "ts": r.ts.isoformat()})
                 max_sent = max(max_sent, r.seq)

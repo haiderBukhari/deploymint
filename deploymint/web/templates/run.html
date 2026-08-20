@@ -48,6 +48,13 @@
   {% endif %}
 
   <form id="approve-plan-form" class="form" style="margin-top:1rem;">
+    <p class="muted" style="margin:0 0 0.5rem;">
+      Terraform, the Ansible playbook, ArgoCD application, GitHub Actions
+      workflow, and monitoring manifests are generated every run regardless
+      of the choices below — they're ready-to-use artifacts you can apply
+      yourself later. "Deploy mode" only controls what happens live, right
+      now, in this run's Execution step.
+    </p>
     <div class="stat-row">
       <label>Replicas <input type="number" name="replicas" value="1" min="1" max="20"></label>
       <label>Port <input type="number" name="port" value="{{ run.analysis.exposed_port or 8000 }}"></label>
@@ -237,8 +244,9 @@
       <span class="badge badge-critical">{{ c.critical or 0 }} critical</span>
       <span class="badge badge-high">{{ c.high or 0 }} high</span>
       {% endif %}
-      {% set lower = (c.medium or 0) + (c.low or 0) + (c.info or 0) %}
-      {% if lower %}<span class="muted">· {{ lower }} lower-severity finding(s) collapsed below</span>{% endif %}
+      {% set lower = your_deps_findings | length %}
+      {% if lower %}<span class="muted">· {{ lower }} in your dependencies</span>{% endif %}
+      {% if base_image_findings %}<span class="muted">· {{ base_image_findings | length }} inherited from the base image</span>{% endif %}
     </p>
     {% endif %}
     <ul class="findings" id="findings">
@@ -256,11 +264,11 @@
       </li>
       {% endfor %}
     </ul>
-    {% if rest_findings %}
-    <details class="step-more">
-      <summary>{{ rest_findings | length }} lower-severity finding(s) (medium/low/info)</summary>
+    {% if your_deps_findings %}
+    <div class="findings-group">
+      <div class="section-label">Your dependencies <span class="muted">· patch by editing this repo</span></div>
       <ul class="findings">
-        {% for f in rest_findings %}
+        {% for f in your_deps_findings %}
         {% set target = fixable_files.get(f.file) %}
         <li class="sev-{{ f.severity }}">
           {{ f.severity }} · {{ f.id }} · {{ f.message }}
@@ -272,6 +280,16 @@
           </div>
           {% endif %}
         </li>
+        {% endfor %}
+      </ul>
+    </div>
+    {% endif %}
+    {% if base_image_findings %}
+    <details class="step-more">
+      <summary>{{ base_image_findings | length }} finding(s) inherited from the base image — fix by bumping the base image, not this repo's code</summary>
+      <ul class="findings">
+        {% for f in base_image_findings %}
+        <li class="sev-{{ f.severity }}">{{ f.severity }} · {{ f.id }} · {{ f.message }}</li>
         {% endfor %}
       </ul>
     </details>
@@ -303,13 +321,9 @@
       OPA {{ 'ran ✓' if run.security.opa_ran else 'did not run ✗' }}</span>
     <span class="badge {{ 'badge-ok' if run.security.redteam_ran else 'badge-fail' }}">
       Red Team {{ 'ran ✓' if run.security.redteam_ran else 'did not run ✗' }}</span>
-    {% if run.security.trivy_ran is defined %}
-    <span class="badge {{ 'badge-ok' if run.security.trivy_ran else 'badge-fail' }}">
-      Trivy (deps) {{ 'ran ✓' if run.security.trivy_ran else 'did not run ✗' }}</span>
-    {% endif %}
-    {% if run.security.trivy_image_ran is defined %}
-    <span class="badge {{ 'badge-ok' if run.security.trivy_image_ran else 'badge-fail' }}">
-      Trivy (image) {{ 'ran ✓' if run.security.trivy_image_ran else 'did not run ✗' }}</span>
+    {% if run.security.code_audit_ran is defined %}
+    <span class="badge {{ 'badge-ok' if run.security.code_audit_ran else 'badge-fail' }}">
+      Code Audit {{ 'ran ✓' if run.security.code_audit_ran else 'did not run ✗' }}</span>
     {% endif %}
   </div>
   {% endif %}

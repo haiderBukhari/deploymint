@@ -17,19 +17,6 @@ RUN curl -Lo /usr/local/bin/opa \
         "https://openpolicyagent.org/downloads/${OPA_VERSION}/opa_linux_amd64_static" \
     && chmod +x /usr/local/bin/opa
 
-# trivy — pinned version. Real CVE scanning (dependencies + the built image),
-# the one finding category Checkov/OPA don't cover at all. See docs/30-trivy.md.
-# The vulnerability DB is baked in at build time (~400MB) so a run's first
-# scan never has to download it from cold — a fresh container previously
-# timed out its own scan waiting on that download.
-ARG TRIVY_VERSION=0.74.0
-RUN curl -Lo /tmp/trivy.tar.gz \
-        "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz" \
-    && tar xzf /tmp/trivy.tar.gz -C /usr/local/bin trivy \
-    && rm /tmp/trivy.tar.gz \
-    && chmod +x /usr/local/bin/trivy \
-    && trivy --download-db-only
-
 # docker CLI only (client) — talks to the mounted host socket, no daemon needed here
 RUN curl -fsSL https://download.docker.com/linux/static/stable/x86_64/docker-27.3.1.tgz \
         | tar xz -C /usr/local/bin --strip-components=1 docker/docker

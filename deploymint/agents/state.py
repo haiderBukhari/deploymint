@@ -50,7 +50,7 @@ class Artifacts(TypedDict):
 class Finding(TypedDict):
     id: str
     severity: Literal["critical", "high", "medium", "low", "info"]
-    source: Literal["checkov", "opa", "redteam", "trivy"]
+    source: Literal["checkov", "opa", "redteam", "code_audit"]
     file: str
     line: NotRequired[int]
     message: str
@@ -64,13 +64,13 @@ class SecurityReport(TypedDict):
     checkov_ran: bool
     opa_ran: bool
     redteam_ran: bool
-    # Set by the Warden's pre-deploy filesystem/config scan. See docs/30-trivy.md.
-    trivy_ran: NotRequired[bool]
-    # Set by the separate post-Execution image scan (agents/image_scan.py) —
-    # a distinct key rather than reusing trivy_ran because it's a genuinely
-    # different scan (the built image, not the generated files) that runs
-    # from a different graph position and can fail independently.
-    trivy_image_ran: NotRequired[bool]
+    # Set by the Code Audit agent (agents/code_audit.py) — an LLM-driven
+    # checklist over the user's actual source files. Replaces the Trivy/Grype
+    # dependency-CVE scanner, which was tried and dropped: both required a
+    # large vulnerability DB download before the first scan could run, and
+    # even bootstrapped, returned 200+ mostly-noise base-OS-package findings.
+    # See docs/34-code-audit.md.
+    code_audit_ran: NotRequired[bool]
     # Per-severity totals across all findings, e.g. {"critical": 1, "high": 3,
     # "medium": 5, "low": 190, "info": 6} — already computed in warden.py for
     # the warden.done event; persisted here too so the run page can render a

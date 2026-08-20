@@ -5,10 +5,12 @@ import time
 import uuid
 from datetime import UTC, datetime
 
+from sqlalchemy import func
+
+from deploymint.agents.code_audit import CodeAuditAgent
 from deploymint.agents.execution import ExecutionEngineAgent
 from deploymint.agents.finops import FinOpsAgent
 from deploymint.agents.graph import build_graph, post_execution, security_gate
-from deploymint.agents.image_scan import ImageScanAgent
 from deploymint.agents.oracle import ObservabilityOracleAgent
 from deploymint.agents.redteam import RedTeamAgent
 from deploymint.agents.smith import ArtifactSmithAgent
@@ -164,14 +166,20 @@ async def resume_from_approval(run: Run, project: Project, approved_plan: dict) 
     directly in sequence — the same precedent `api/fixes.py`'s
     `apply_finding_fix` already uses for a partial pipeline re-run. See
     docs/33-deploy-lock-and-findings.md."""
-    bus = registry.create(run.id)
-    bus.add_sink(_event_persist_sink)
-
     Session = get_session_factory()
     with Session() as db:
+        # A fresh bus must continue seq numbering from where the paused
+        # phase left off, not restart at 0 — otherwise every event this
+        # phase emits collides with one the first phase already persisted
+        # (same run_id), and the INSERT silently fails for the whole
+        # resumed phase (swallowed by EventBus.emit()'s broad except).
+        max_seq = db.query(func.max(Event.seq)).filter_by(run_id=run.id).scalar() or 0
         db.query(Run).filter_by(id=run.id).update(
             {"status": "running", "approved_plan": approved_plan})
         db.commit()
+
+    bus = registry.create(run.id, start_seq=max_seq)
+    bus.add_sink(_event_persist_sink)
 
     state = {
         "run_id": run.id, "project_id": project.id, "project_name": project.name,
@@ -204,7 +212,7 @@ async def _resume_execute(run_id: str, state: dict, bus) -> None:
 
 async def _run_from_smith(state: dict, bus) -> dict:
     """The same agent sequence build_graph() wires (smith -> warden ->
-    [redteam] -> gate -> execution -> [image_scan] -> [oracle] -> finops), as
+    [redteam] -> [code_audit] -> gate -> execution -> [oracle] -> finops), as
     a plain function instead of a compiled StateGraph — see
     resume_from_approval()'s docstring for why."""
     s = get_settings()
@@ -234,6 +242,8 @@ async def _run_from_smith(state: dict, bus) -> dict:
 
     if s.enable_redteam:
         await step(RedTeamAgent(bus))
+    if s.enable_code_audit:
+        await step(CodeAuditAgent(bus))
 
     route = security_gate(state)
     if route == "blocked":
@@ -241,8 +251,6 @@ async def _run_from_smith(state: dict, bus) -> dict:
         return state
 
     await step(ExecutionEngineAgent(bus))
-    if s.enable_trivy:
-        await step(ImageScanAgent(bus))
 
     if post_execution(state) == "observe":
         await step(ObservabilityOracleAgent(bus))
